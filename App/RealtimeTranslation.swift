@@ -69,6 +69,7 @@ import Foundation
                     configured = true; started = Date(); onReady()
                     sending = Task { [weak self] in
                         guard let self else { return }
+                        var frames = PCMFrames()
                         do {
                             for try await chunk in chunks {
                                 try Task.checkCancellation()
@@ -81,12 +82,21 @@ import Foundation
                                 }
                                 onLevel(level)
                                 inputLevel = max(inputLevel, level)
-                                try await socket.send(.string(try RealtimeProtocol.append(chunk)))
-                                inputBytes += chunk.count
-                                onSubmitted(chunk.count)
+                                for frame in frames.append(chunk) {
+                                    try Task.checkCancellation()
+                                    guard self.generation == token else { throw CancellationError() }
+                                    try await socket.send(.string(try RealtimeProtocol.append(frame)))
+                                    inputBytes += frame.count; onSubmitted(frame.count)
+                                }
                             }
                             guard self.generation == token, !Task.isCancelled else { return }
                             self.microphone.stop(); onFinishing()
+                            if let tail = frames.finish() {
+                                try Task.checkCancellation()
+                                guard self.generation == token else { throw CancellationError() }
+                                try await socket.send(.string(try RealtimeProtocol.append(tail)))
+                                inputBytes += tail.count; onSubmitted(tail.count)
+                            }
                             try await socket.send(.string("{\"type\":\"session.close\"}"))
                             self.armTimeout(socket, token: token, seconds: 25)
                         } catch {

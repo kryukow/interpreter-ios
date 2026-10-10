@@ -41,6 +41,12 @@ jobs:
           "$RUNNER_TEMP/playback-tests"
       - name: Verify build tools
         run: xcodebuild -version
+      - name: Test 200 ms microphone frames
+        run: |
+          swiftc App/PCMFrames.swift scripts/test_pcm_frames.swift -o "$RUNNER_TEMP/frame-tests"
+          "$RUNNER_TEMP/frame-tests"
+      - name: Verify build environment
+        run: xcodegen --version
       - name: Generate project
         run: xcodegen generate
       - name: Build simulator

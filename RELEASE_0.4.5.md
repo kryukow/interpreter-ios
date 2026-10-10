@@ -4,3 +4,4 @@
 - Display local player startup estimate measured from the play request to advancing playback position, excluding elapsed clip time. This does not measure acoustic speaker or Bluetooth latency.
 - Tests cover a loud initial click, 4 seconds silence, quiet onset, speech, and a final click after 5 seconds silence. The user's actual four-second delay still requires device verification; no original audio file was available for analysis.
 - Voice adaptation, no-charge replay, local diagnostics and background cleanup remain unchanged.
+- After German-to-Russian empty-response feedback, send microphone PCM in the documented recommended 200 ms engine frames. Zero-pad only the last partial frame (less than 200 ms; included in the spend estimate), then gracefully close. This is a framing correction for evaluation, not a verified fix for the model's empty Russian output. No automatic retries or extra transcription API.
