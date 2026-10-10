@@ -145,7 +145,8 @@ import Foundation
             preparedAudio = audio
         }
         playbackWatch?.cancel()
-        player.stop(); player.currentTime = 0
+        if player.isPlaying { player.pause() }
+        player.currentTime = 0
         player.delegate = self; self.player = player; playbackFinished = onFinished
         guard player.play() else { self.player = nil; playbackFinished = nil; throw Failure.message("Не удалось воспроизвести голос OpenAI.") }
         playbackWatch?.cancel()
