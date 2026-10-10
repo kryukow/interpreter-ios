@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
-    struct Result { let text: String; let audio: Data; let originalAudio: Data; let submittedAudio: Data?; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let capturedSeconds: Double; let transcriptParts: Int; let audioParts: Int; let firstOutputSeconds: Double? }
+    struct Result { let text: String; let audio: Data; let originalAudio: Data; let submittedAudio: Data?; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let capturedSeconds: Double; let transcriptParts: Int; let audioParts: Int; let boostEnabled: Bool; let maximumInputGain: Double; let firstOutputSeconds: Double? }
     private let microphone = RealtimeMicrophone()
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -15,7 +15,7 @@ import Foundation
     private var playbackFinished: (() -> Void)?
     private var playbackWatch: Task<Void, Never>?
 
-    func run(key: String, source: String, target: String, onReady: @escaping () -> Void,
+    func run(key: String, source: String, target: String, boostQuietSpeech: Bool, onReady: @escaping () -> Void,
              onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void,
              onSubmitted: @escaping (Int) -> Void, onLevel: @escaping (Double) -> Void,
              onInputText: @escaping (String) -> Void) async throws -> Result {
@@ -27,6 +27,7 @@ import Foundation
         var submittedPCM = Data()
         var capturedBytes = 0, transcriptParts = 0, audioParts = 0
         var closeRequested = false
+        var voiceGain = PCMVoiceGain()
         var request = URLRequest(url: RealtimeProtocol.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
@@ -90,7 +91,8 @@ import Foundation
                                 }
                                 onLevel(level)
                                 inputLevel = max(inputLevel, level)
-                                for frame in frames.append(chunk) {
+                                for rawFrame in frames.append(chunk) {
+                                    let frame = voiceGain.process(rawFrame, enabled: boostQuietSpeech)
                                     try Task.checkCancellation()
                                     guard self.generation == token else { throw CancellationError() }
                                     try await socket.send(.string(try RealtimeProtocol.append(frame)))
@@ -101,7 +103,8 @@ import Foundation
                             }
                             guard self.generation == token, !Task.isCancelled else { return }
                             self.microphone.stop(); onFinishing()
-                            if let tail = frames.finish() {
+                            if let rawTail = frames.finish() {
+                                let tail = voiceGain.process(rawTail, enabled: boostQuietSpeech)
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
                                 try await socket.send(.string(try RealtimeProtocol.append(tail)))
@@ -155,7 +158,8 @@ import Foundation
                           removedLeading: clip.leading, removedTrailing: clip.trailing,
                           inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond),
                           capturedSeconds: Double(capturedBytes) / Double(RealtimeProtocol.bytesPerSecond),
-                          transcriptParts: transcriptParts, audioParts: audioParts, firstOutputSeconds: firstOutput)
+                          transcriptParts: transcriptParts, audioParts: audioParts,
+                          boostEnabled: boostQuietSpeech, maximumInputGain: voiceGain.maximumGain, firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
         catch is CancellationError { throw CancellationError() }
         catch {

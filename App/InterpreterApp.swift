@@ -19,6 +19,9 @@ import UIKit
     @Published var account = ""
     @Published var model = UserDefaults.standard.string(forKey: "model") ?? ""
     @Published var realtimeMode = UserDefaults.standard.bool(forKey: "realtimeMode")
+    @Published var boostQuietSpeech = UserDefaults.standard.object(forKey: "boostQuietSpeech") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(boostQuietSpeech, forKey: "boostQuietSpeech") }
+    }
     @Published var realtimeStats = ""
     @Published var reviewResponse = false
     @Published var reviewingOriginal = false
@@ -190,7 +193,7 @@ import UIKit
                 guard let key = try RealtimeKeyStore.load(), !key.isEmpty else {
                     throw Failure.message("Добавь API-ключ в настройках → Голосовой перевод API.")
                 }
-                let result = try await realtime.run(key: key, source: language, target: language == "ru" ? "de" : "ru",
+                let result = try await realtime.run(key: key, source: language, target: language == "ru" ? "de" : "ru", boostQuietSpeech: boostQuietSpeech,
                     onReady: { [weak self] in
                         guard let self, self.epoch == token else { return }
                         self.phase = .listening; self.message = "Говори. Отпусти кнопку — прозвучит перевод"
@@ -219,6 +222,7 @@ import UIKit
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
                 realtimeStats += String(format: "\nПропущено тихих краёв: до %.1f с · после %.1f с", result.removedLeading, result.removedTrailing)
                 realtimeStats += "\nОтвет завершён сервером · Частей текста: \(result.transcriptParts) · звука: \(result.audioParts)"
+                realtimeStats += String(format: "\nУсиление тихой речи: %@ · максимум ×%.1f", result.boostEnabled ? "вкл." : "выкл.", result.maximumInputGain)
                 if reviewResponse {
                     realtimeStats += result.inputLevel < 0.001 ? "\nОтправленный звук микрофона почти беззвучный." : "\nВ отправленном аудио есть звук. Текст перевода от OpenAI не получен."
                 }
@@ -446,6 +450,10 @@ struct SettingsView: View {
                     if !keyMessage.isEmpty { Text(keyMessage).font(.footnote) }
                 }
                 if vm.realtimeMode {
+                    Section("Микрофон") {
+                        Toggle("Усилить тихую речь", isOn: $vm.boostQuietSpeech).disabled(vm.busy)
+                        Text("Поднимает громкость тихого голоса перед отправкой, с защитой от перегрузки. Не увеличивает длительность записи и не создаёт дополнительных запросов. В проверке записи слышно именно то, что отправлено.").font(.footnote)
+                    }
                     Section("Счётчик расходов") {
                         LabeledContent("Примерный остаток", value: vm.balanceLabel)
                         LabeledContent("Расход приложения", value: String(format: "$%.4f", vm.budget.spent))
