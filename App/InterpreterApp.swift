@@ -54,8 +54,12 @@ import UIKit
         work = Task {
             do {
                 try await capture.start(locale: language == "ru" ? "ru-RU" : "de-DE",
-                    onText: { [weak self] text in self?.source = text },
-                    onEnd: { [weak self] error in self?.recognized(error) },
+                    onText: { [weak self] text in
+                        guard let self, self.epoch == token else { return }; self.source = text
+                    },
+                    onEnd: { [weak self] error in
+                        guard let self, self.epoch == token else { return }; self.recognized(error)
+                    },
                     onLevel: { [weak self] level in
                         guard let self, self.epoch == token else { return }; self.addLevel(level)
                     })
@@ -64,7 +68,7 @@ import UIKit
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             } catch {
                 guard epoch == token else { return }
-                capture.cancel(); phase = .idle; message = error.localizedDescription
+                capture.cancel(); heldLanguage = nil; phase = .idle; message = error.localizedDescription
             }
         }
     }

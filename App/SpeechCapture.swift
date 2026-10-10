@@ -13,6 +13,7 @@ import Speech
 
     func start(locale: String, onText: @escaping (String) -> Void,
                onEnd: @escaping (Error?) -> Void, onLevel: @escaping (Double) -> Void) async throws {
+        try Task.checkCancellation()
         cancel()
         transcript = SpeechTranscript()
         let token = generation
