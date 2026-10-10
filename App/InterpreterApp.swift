@@ -22,6 +22,7 @@ import UIKit
     @Published var realtimeStats = ""
     @Published var reviewResponse = false
     @Published var reviewingOriginal = false
+    @Published var playbackTiming = ""
     @Published var heldLanguage: String?
     @Published var soundLevels = Array(repeating: CGFloat(0), count: 40)
     private func addLevel(_ level: Double) {
@@ -230,7 +231,11 @@ import UIKit
         do {
             phase = .playing; message = reviewingOriginal ? "Звучит исходный ответ OpenAI" : "Звучит голосовой перевод OpenAI"
             let token = epoch
-            try realtime.play(audio) { [weak self] in
+            playbackTiming = ""
+            try realtime.play(audio, onStarted: { [weak self] delay in
+                guard let self, self.epoch == token else { return }
+                self.playbackTiming = String(format: "Запуск плеера: %.2f с", delay)
+            }) { [weak self] in
                 guard let self, self.epoch == token else { return }
                 self.phase = .idle; self.message = self.reviewResponse ? "Перевод не получен. Можно начать новую фразу." : "Готово. Выбери язык следующей фразы"
             }
@@ -332,6 +337,9 @@ struct InterpreterView: View {
                     Text("ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
                     Text(vm.translation.isEmpty ? "—" : vm.translation).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     Button("Прослушать снова") { vm.replay() }.disabled((vm.busy && !(vm.realtimeMode && vm.phase == .playing)) || !vm.canReplay)
+                    if vm.realtimeMode && !vm.playbackTiming.isEmpty {
+                        Text(vm.playbackTiming).font(.caption2).foregroundStyle(.secondary)
+                    }
                     if vm.realtimeMode && vm.reviewResponse {
                         Button("Проверить исходный ответ · бесплатно") { vm.playOriginal() }.disabled(vm.busy && vm.phase != .playing)
                         Text("В ответе нет текста перевода. Исходный звук сохранён в памяти без обрезки; он может содержать тишину.").font(.footnote).foregroundStyle(.secondary)

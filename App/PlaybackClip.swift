@@ -23,10 +23,24 @@ enum PlaybackClip {
         let sorted = levels.map { $0.rms }.sorted()
         let floor = sorted[(sorted.count - 1) / 10]
         let threshold = max(8, min(128, floor * 3))
-        let audible = levels.filter { $0.rms > threshold || Double($0.peak) > threshold * 4 }
-        guard let first = audible.first, let last = audible.last else {
+        // A single pop is not a speech boundary. Require 30 ms of sustained
+        // activity, then retain margins around it for quiet first/last consonants.
+        var runStart = 0, runLength = 0, firstIndex: Int?, lastIndex: Int?
+        for index in levels.indices {
+            let level = levels[index]
+            if level.rms > threshold || Double(level.peak) > threshold * 4 {
+                if runLength == 0 { runStart = index }
+                runLength += 1
+                if runLength >= 3 {
+                    if firstIndex == nil { firstIndex = runStart }
+                    lastIndex = index
+                }
+            } else { runLength = 0 }
+        }
+        guard let firstIndex, let lastIndex else {
             return Result(pcm: pcm, leading: 0, trailing: 0)
         }
+        let first = levels[firstIndex], last = levels[lastIndex]
         let start = max(0, first.start - sampleRate * 35 / 100)
         let end = min(frames, last.end + sampleRate * 45 / 100)
         return Result(pcm: pcm.subdata(in: start * 2..<end * 2),

@@ -137,7 +137,8 @@ import Foundation
         }
     }
     func finish() { microphone.stop() }
-    func play(_ audio: Data, onFinished: @escaping () -> Void) throws {
+    func play(_ audio: Data, onStarted: @escaping (Double) -> Void, onFinished: @escaping () -> Void) throws {
+        let requested = ProcessInfo.processInfo.systemUptime
         microphone.stop()
         let session = AVAudioSession.sharedInstance()
         if !playbackSessionActive {
@@ -158,9 +159,14 @@ import Foundation
         guard player.play() else { self.player = nil; playbackFinished = nil; throw Failure.message("Не удалось воспроизвести голос OpenAI.") }
         playbackWatch?.cancel()
         playbackWatch = Task { [weak self, weak player] in
+            var reported = false
             while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 200_000_000)
+                try? await Task.sleep(nanoseconds: 100_000_000)
                 guard !Task.isCancelled, let self, let player, self.player === player else { return }
+                if !reported, player.currentTime > 0.02 {
+                    reported = true
+                    onStarted(max(0, ProcessInfo.processInfo.systemUptime - requested - player.currentTime))
+                }
                 if !player.isPlaying { self.finishPlayback(player); return }
             }
         }

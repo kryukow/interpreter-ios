@@ -25,6 +25,12 @@ import Foundation
         precondition(abs(adapted.leading - 2.65) < 0.00001 && abs(adapted.trailing - 9.55) < 0.00001)
         let short = tone(-32768, seconds: 0.01)
         precondition(PlaybackClip.trim(short).pcm == short, "safe negative PCM extremes")
+        var popped = tone(24000, seconds: 0.01)
+        popped.append(tone(0, seconds: 3.99)); popped.append(quiet); popped.append(speech)
+        popped.append(tone(0, seconds: 5)); popped.append(tone(24000, seconds: 0.01))
+        let sustained = PlaybackClip.trim(popped)
+        precondition(abs(sustained.leading - 3.65) < 0.00001, "ignore isolated initial pop, preserve quiet onset")
+        precondition(abs(sustained.trailing - 4.56) < 0.00001, "ignore isolated final pop")
         print("PASS playback clip: both edges, low-level floor, quiet words, internal pauses, exact PCM preservation")
     }
 }
