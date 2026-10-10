@@ -9,10 +9,12 @@ import Speech
     private var tapped = false
     private var generation = UUID()
     private var deadline: Task<Void, Never>?
+    private var transcript = SpeechTranscript()
 
     func start(locale: String, onText: @escaping (String) -> Void,
                onEnd: @escaping (Error?) -> Void) async throws {
         cancel()
+        transcript = SpeechTranscript()
         let token = generation
         let auth = await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { continuation.resume(returning: $0) }
@@ -36,9 +38,15 @@ import Speech
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             let text = result?.bestTranscription.formattedString
             let final = result?.isFinal == true
+            let first = result?.bestTranscription.segments.first?.timestamp
+            let last = result?.bestTranscription.segments.last
+            let end = last.map { $0.timestamp + $0.duration }
+            let stable = result?.speechRecognitionMetadata != nil
             Task { @MainActor in
                 guard let self, self.generation == token else { return }
-                if let text { onText(text) }
+                if let text {
+                    onText(self.transcript.receive(text, start: first, end: end, stable: stable))
+                }
                 if final || error != nil {
                     self.cancel()
                     onEnd(error)
