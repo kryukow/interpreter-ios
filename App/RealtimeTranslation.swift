@@ -1,0 +1,146 @@
+import AVFoundation
+import Foundation
+
+@MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
+    struct Result { let text: String; let audio: Data; let inputSeconds: Double; let firstOutputSeconds: Double? }
+    private let microphone = RealtimeMicrophone()
+    private var socket: URLSessionWebSocketTask?
+    private var session: URLSession?
+    private var sending: Task<Void, Never>?
+    private var timeout: Task<Void, Never>?
+    private var generation = UUID()
+    private var player: AVAudioPlayer?
+    private var playbackFinished: (() -> Void)?
+    private var inputBytes = 0
+
+    func run(key: String, target: String, onReady: @escaping () -> Void,
+             onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void) async throws -> Result {
+        cancel()
+        let token = generation
+        inputBytes = 0
+        var request = URLRequest(url: RealtimeProtocol.endpoint)
+        request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 20
+        configuration.timeoutIntervalForResource = 100
+        let session = URLSession(configuration: configuration), socket = session.webSocketTask(with: request)
+        self.session = session; self.socket = socket
+        socket.resume()
+        timeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 20_000_000_000)
+            guard !Task.isCancelled, let self, self.generation == token else { return }
+            self.microphone.stop(); socket.cancel(with: .goingAway, reason: nil)
+        }
+        var configured = false, text = "", audio = Data(), started: Date?, firstOutput: Double?, completed = false
+        defer {
+            if generation == token {
+                microphone.stop(); sending?.cancel(); sending = nil; timeout?.cancel(); timeout = nil
+                self.socket = nil; self.session = nil
+            }
+            socket.cancel(with: .normalClosure, reason: nil); session.invalidateAndCancel()
+        }
+        do {
+            while !completed {
+                try Task.checkCancellation()
+                guard generation == token else { throw CancellationError() }
+                let message = try await socket.receive()
+                let data: Data
+                switch message {
+                case .string(let string): data = Data(string.utf8)
+                case .data(let bytes): data = bytes
+                @unknown default: throw RealtimeProtocol.ProtocolError.invalidEvent
+                }
+                switch try RealtimeProtocol.event(data) {
+                case .created:
+                    try await socket.send(.string(try RealtimeProtocol.configuration(target: target)))
+                case .updated(let language):
+                    guard !configured else { continue }
+                    guard language == target else { throw Failure.message("OpenAI не подтвердил нужный язык перевода.") }
+                    timeout?.cancel()
+                    let chunks = try await microphone.start()
+                    try Task.checkCancellation()
+                    guard generation == token else { throw CancellationError() }
+                    configured = true; started = Date(); onReady()
+                    sending = Task { [weak self] in
+                        guard let self else { return }
+                        do {
+                            for try await chunk in chunks {
+                                try Task.checkCancellation()
+                                guard self.generation == token else { throw CancellationError() }
+                                try await socket.send(.string(try RealtimeProtocol.append(chunk)))
+                                self.inputBytes += chunk.count
+                            }
+                            guard self.generation == token, !Task.isCancelled else { return }
+                            self.microphone.stop(); onFinishing()
+                            try await socket.send(.string("{\"type\":\"session.close\"}"))
+                            self.armTimeout(socket, token: token, seconds: 25)
+                        } catch {
+                            guard self.generation == token, !Task.isCancelled else { return }
+                            self.microphone.stop(); socket.cancel(with: .goingAway, reason: nil)
+                        }
+                    }
+                    // A stalled send/receive must not leave an open paid session indefinitely.
+                    armTimeout(socket, token: token, seconds: 90)
+                case .transcript(let delta):
+                    if firstOutput == nil, let started { firstOutput = Date().timeIntervalSince(started) }
+                    text += delta
+                    guard text.utf8.count <= 100_000 else { throw Failure.message("Слишком длинный ответ голосового перевода.") }
+                    onText(text)
+                case .audio(let delta):
+                    if firstOutput == nil, let started { firstOutput = Date().timeIntervalSince(started) }
+                    guard audio.count + delta.count <= 12_000_000 else { throw Failure.message("Слишком длинный голосовой ответ.") }
+                    audio.append(delta)
+                case .closed:
+                    guard configured else { throw Failure.message("OpenAI закрыл сессию до начала перевода.") }
+                    completed = true
+                case .failure(let message): throw Failure.message(message)
+                case .other: break
+                }
+            }
+            guard !audio.isEmpty else { throw Failure.message("Голосовой перевод не получен. Попробуй короткую чёткую фразу.") }
+            return Result(text: text, audio: try RealtimeProtocol.wav(audio),
+                          inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond), firstOutputSeconds: firstOutput)
+        } catch let error as Failure { throw error }
+        catch is CancellationError { throw CancellationError() }
+        catch {
+            if Task.isCancelled || generation != token { throw CancellationError() }
+            throw Failure.message("Голосовое соединение прервалось. Проверь интернет, API-ключ, доступ к модели и баланс. Незавершённый перевод не озвучен.")
+        }
+    }
+    private func armTimeout(_ socket: URLSessionWebSocketTask, token: UUID, seconds: UInt64) {
+        timeout?.cancel()
+        timeout = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: seconds * 1_000_000_000)
+            guard !Task.isCancelled, let self, self.generation == token else { return }
+            self.microphone.stop(); socket.cancel(with: .goingAway, reason: nil)
+        }
+    }
+    func finish() { microphone.stop() }
+    func play(_ audio: Data, onFinished: @escaping () -> Void) throws {
+        microphone.stop()
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio); try session.setActive(true)
+        let player = try AVAudioPlayer(data: audio)
+        player.delegate = self; self.player = player; playbackFinished = onFinished
+        guard player.play() else { self.player = nil; playbackFinished = nil; throw Failure.message("Не удалось воспроизвести голос OpenAI.") }
+    }
+    func cancel() {
+        generation = UUID(); microphone.stop(); sending?.cancel(); sending = nil
+        timeout?.cancel(); timeout = nil
+        socket?.cancel(with: .goingAway, reason: nil); socket = nil
+        session?.invalidateAndCancel(); session = nil
+        player?.stop(); player = nil; playbackFinished = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+    nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        Task { @MainActor in
+            guard self.player === player else { return }
+            self.player = nil; let callback = self.playbackFinished; self.playbackFinished = nil
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            callback?()
+        }
+    }
+    nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+        audioPlayerDidFinishPlaying(player, successfully: false)
+    }
+}

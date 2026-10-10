@@ -23,6 +23,10 @@ jobs:
         run: |
           swiftc App/SpeechTranscript.swift scripts/test_speech_transcript.swift -o "$RUNNER_TEMP/speech-tests"
           "$RUNNER_TEMP/speech-tests"
+      - name: Test realtime translation events and PCM playback
+        run: |
+          swiftc App/RealtimeProtocol.swift scripts/test_realtime_protocol.swift -o "$RUNNER_TEMP/realtime-tests"
+          "$RUNNER_TEMP/realtime-tests"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate project
@@ -41,11 +45,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$RUNNER_TEMP/Device/Build/Products/Release-iphoneos/Interpreter.app" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-0.3.6-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-0.3.6-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-0.4.0-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-0.4.0-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-0.3.6-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-0.3.6-Unsigned.ipa
+          name: Interpreter-0.4.0-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-0.4.0-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7

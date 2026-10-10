@@ -18,6 +18,10 @@ import UIKit
     @Published var models: [ModelChoice] = []
     @Published var account = ""
     @Published var model = UserDefaults.standard.string(forKey: "model") ?? ""
+    @Published var realtimeMode = UserDefaults.standard.bool(forKey: "realtimeMode")
+    @Published var realtimeStats = ""
+    private let realtime = RealtimeTranslation()
+    private var realtimeAudio: Data?
     private let capture = SpeechCapture()
     let voices = VoicePreferences()
     private let speaker = AVSpeechSynthesizer()
@@ -27,6 +31,7 @@ import UIKit
     override init() { super.init(); speaker.delegate = self; account = (try? SessionStore.load())?.email ?? "" }
     var busy: Bool { phase != .idle }
     func tap(_ language: String) {
+        if realtimeMode { tapRealtime(language); return }
         if phase == .listening {
             phase = .finishing; message = "Завершаю распознавание…"
             capture.finish { [weak self] error in self?.recognized(error) }
@@ -56,7 +61,7 @@ import UIKit
         translate()
     }
     func translate() {
-        guard phase == .idle else { return }
+        guard phase == .idle, !realtimeMode else { return }
         let text = source, target = language == "ru" ? "German" : "Russian"
         let sourceLanguage = language == "ru" ? "Russian" : "German"
         let token = epoch
@@ -82,7 +87,9 @@ import UIKit
         }
     }
     func speak() {
-        guard phase == .idle, !translation.isEmpty else { return }
+        guard phase == .idle else { return }
+        if realtimeMode { speakRealtime(); return }
+        guard !translation.isEmpty else { return }
         voices.refresh()
         do {
             let session = AVAudioSession.sharedInstance()
@@ -100,10 +107,66 @@ import UIKit
     }
     func cancel() {
         epoch = UUID(); work?.cancel(); work = nil; capture.cancel()
+        realtime.cancel()
         activeUtterance = nil
         speaker.stopSpeaking(at: .immediate)
         if phase == .translating { translation = "" }
         phase = .idle; message = "Остановлено"
+    }
+    private func tapRealtime(_ language: String) {
+        if phase == .listening {
+            guard self.language == language else { return }
+            phase = .finishing; message = "Завершаю голосовой перевод…"; realtime.finish(); return
+        }
+        guard phase == .idle else { return }
+        self.language = language; source = ""; translation = ""; restored = ""
+        realtimeAudio = nil; realtimeStats = ""
+        phase = .starting; message = "Подключаю голосовой перевод…"
+        let token = epoch
+        work = Task {
+            do {
+                guard let key = try RealtimeKeyStore.load(), !key.isEmpty else {
+                    throw Failure.message("Добавь API-ключ в настройках → Голосовой перевод API.")
+                }
+                let result = try await realtime.run(key: key, target: language == "ru" ? "de" : "ru",
+                    onReady: { [weak self] in
+                        guard let self, self.epoch == token else { return }
+                        self.phase = .listening; self.message = "Слушаю. Нажми этот язык ещё раз — прозвучит перевод"
+                    }, onFinishing: { [weak self] in
+                        guard let self, self.epoch == token else { return }
+                        self.phase = .finishing; self.message = "Получаю окончание голосового перевода…"
+                    }, onText: { [weak self] text in
+                        guard let self, self.epoch == token else { return }
+                        self.translation = text
+                    })
+                guard epoch == token else { return }
+                translation = result.text; realtimeAudio = result.audio
+                realtimeStats = String(format: "Отправлено %.1f с аудио", result.inputSeconds)
+                if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
+                phase = .idle; speakRealtime()
+            } catch {
+                guard epoch == token else { return }
+                realtime.cancel(); realtimeAudio = nil; translation = ""
+                phase = .idle; message = error.localizedDescription
+            }
+        }
+    }
+    private func speakRealtime() {
+        guard let audio = realtimeAudio else { return }
+        do {
+            phase = .playing; message = "Звучит голосовой перевод OpenAI"
+            let token = epoch
+            try realtime.play(audio) { [weak self] in
+                guard let self, self.epoch == token else { return }
+                self.phase = .idle; self.message = "Готово. Выбери язык следующей фразы"
+            }
+        } catch { phase = .idle; message = error.localizedDescription }
+    }
+    var canReplay: Bool { realtimeMode ? realtimeAudio != nil : !translation.isEmpty }
+    func modeChanged() {
+        cancel(); source = ""; translation = ""; restored = ""; realtimeAudio = nil; realtimeStats = ""
+        UserDefaults.standard.set(realtimeMode, forKey: "realtimeMode")
+        message = realtimeMode ? "Голосовой перевод API · выбери язык" : "Выбери язык и произнеси фразу"
     }
     nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
         Task { @MainActor in
@@ -140,6 +203,8 @@ struct InterpreterView: View {
                 }
                 Image(systemName: vm.phase == .listening ? "waveform" : "waveform.circle").font(.system(size: 52)).foregroundStyle(.mint)
                 Text(vm.message).font(.headline).multilineTextAlignment(.center).frame(minHeight: 60)
+                Text(vm.realtimeMode ? "Голосовой перевод API · платный тест" : "Перевод через подписку ChatGPT")
+                    .font(.caption).foregroundStyle(.secondary)
                 HStack(spacing: 16) {
                     languageButton("Русский", language: "ru")
                     languageButton("Deutsch", language: "de")
@@ -147,6 +212,11 @@ struct InterpreterView: View {
                 Text("Нажми язык → скажи фразу → нажми ещё раз").font(.footnote).foregroundStyle(.secondary)
                 if vm.busy { Button("Остановить") { vm.cancel() }.buttonStyle(.bordered) }
                 VStack(alignment: .leading, spacing: 12) {
+                    if vm.realtimeMode {
+                        Text("ГОЛОС → ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
+                        Text("Модель переводит непосредственно аудио. Текст появится по мере перевода, голос прозвучит после завершения записи.").font(.footnote).foregroundStyle(.secondary)
+                        if !vm.realtimeStats.isEmpty { Text(vm.realtimeStats).font(.footnote).foregroundStyle(.secondary) }
+                    } else {
                     Text("УСЛЫШАЛА · \(vm.language == "ru" ? "РУССКИЙ" : "DEUTSCH")").font(.caption).foregroundStyle(.secondary)
                     TextEditor(text: $vm.source).frame(minHeight: 90).scrollContentBackground(.hidden).disabled(vm.busy)
                     HStack {
@@ -160,9 +230,10 @@ struct InterpreterView: View {
                         Text(vm.restored).textSelection(.enabled)
                         Divider()
                     }
+                    }
                     Text("ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
                     Text(vm.translation.isEmpty ? "—" : vm.translation).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Прослушать снова") { vm.speak() }.disabled(vm.busy || vm.translation.isEmpty)
+                    Button("Прослушать снова") { vm.speak() }.disabled(vm.busy || !vm.canReplay)
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
             }.padding(24)
         }.background(Color(red: 0.035, green: 0.06, blue: 0.09))
@@ -170,6 +241,7 @@ struct InterpreterView: View {
         .onAppear { updateScreenAwake() }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .onChange(of: keepScreenAwake) { _, _ in updateScreenAwake() }
+        .onChange(of: vm.realtimeMode) { _, _ in vm.modeChanged() }
         .onChange(of: vm.source) { _, _ in if !vm.busy { vm.restored = ""; vm.translation = "" } }
         .onChange(of: scenePhase) { _, phase in
             updateScreenAwake()
@@ -196,15 +268,41 @@ struct SettingsView: View {
     @StateObject private var login = Login()
     @State private var busy = false
     @State private var message = ""
+    @State private var apiKey = ""
+    @State private var keySaved = false
+    @State private var keyMessage = ""
+    @State private var removeKey = false
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
             Form {
+                Section("Режим перевода") {
+                    Picker("Использовать", selection: $vm.realtimeMode) {
+                        Text("Подписка ChatGPT").tag(false)
+                        Text("Голосовой перевод API · тест").tag(true)
+                    }
+                    Text(vm.realtimeMode ? "Голос отправляется в OpenAI. Модель gpt-realtime-translate возвращает перевод и собственный голос. Оплата из баланса API, отдельно от подписки." : "Распознавание Apple, перевод текста через подписку ChatGPT, озвучка голосом iPhone.").font(.footnote)
+                }
+                Section("Голосовой перевод API") {
+                    Text(keySaved ? "API-ключ сохранён на этом iPhone" : "API-ключ ещё не добавлен").font(.footnote)
+                    SecureField("Вставь API-ключ OpenAI", text: $apiKey)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    Button("Сохранить API-ключ") {
+                        do { try RealtimeKeyStore.save(apiKey); apiKey = ""; keySaved = true; keyMessage = "Сохранено" }
+                        catch { keyMessage = error.localizedDescription }
+                    }.disabled(apiKey.isEmpty)
+                    if keySaved { Button("Удалить API-ключ", role: .destructive) { removeKey = true } }
+                    Link("Создать ключ на сайте OpenAI", destination: URL(string: "https://platform.openai.com/api-keys")!)
+                    Link("Баланс и расходы API", destination: URL(string: "https://platform.openai.com/settings/organization/billing/overview")!)
+                    Text("Ориентир тарифа модели: $0,034 за минуту аудио. Одна запись — максимум 60 секунд. Счётчик длительности не является банковским балансом; фактические списания смотри на сайте OpenAI.").font(.footnote)
+                    Text("Ключ вводится только здесь и хранится в защищённом хранилище iPhone. Записи и переводы в приложении не сохраняются. Сервер и включённый компьютер не нужны.").font(.footnote)
+                    if !keyMessage.isEmpty { Text(keyMessage).font(.footnote) }
+                }
                 Section("Экран") {
                     Toggle("Не гасить экран", isOn: $keepScreenAwake)
                     Text("Экран остаётся включённым, пока Interpreter открыт. При сворачивании обычная автоблокировка возвращается.").font(.footnote)
                 }
-                VoiceSettingsView(preferences: vm.voices)
+                if !vm.realtimeMode { VoiceSettingsView(preferences: vm.voices) }
                 Section("ChatGPT") {
                     Text(vm.account.isEmpty ? "Вход не выполнен" : vm.account)
                     Button("Войти через ChatGPT") {
@@ -226,7 +324,7 @@ struct SettingsView: View {
                     Text(message.isEmpty ? login.message : message).font(.footnote)
                 }
                 Section {
-                    Text("Восстановление смысла и перевод выполняются двумя запросами через лимиты твоей подписки ChatGPT. Это может занять немного больше времени. Аудио в OpenAI не отправляется: туда уходит только текст.")
+                    Text("В режиме подписки восстановление смысла и перевод выполняются двумя запросами через лимиты ChatGPT. Аудио в OpenAI не отправляется: туда уходит только текст. В голосовом режиме API в OpenAI передаётся аудио.")
                     Text("Распознавание выполняется на устройстве, если язык поддерживается. Иначе iPhone может использовать сервер Apple. Качество проверим на реальных фразах.")
                 }.font(.footnote)
             }.navigationTitle("Настройки")
@@ -236,7 +334,16 @@ struct SettingsView: View {
                     if let url = login.browserURL { LoginBrowser(url: url).interactiveDismissDisabled() }
                 }
                 .onChange(of: vm.model) { _, value in UserDefaults.standard.set(value, forKey: "model") }
+                .onDisappear { apiKey = "" }
+                .confirmationDialog("Удалить API-ключ с этого iPhone?", isPresented: $removeKey, titleVisibility: .visible) {
+                    Button("Удалить ключ", role: .destructive) {
+                        do { try RealtimeKeyStore.remove(); keySaved = false; keyMessage = "Ключ удалён" }
+                        catch { keyMessage = error.localizedDescription }
+                    }
+                    Button("Отмена", role: .cancel) {}
+                }
                 .task {
+                    keySaved = ((try? RealtimeKeyStore.load()) ?? nil) != nil
                     guard !vm.account.isEmpty, !busy else { return }
                     busy = true
                     defer { busy = false }
