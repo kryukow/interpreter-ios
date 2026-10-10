@@ -201,7 +201,9 @@ import UIKit
                     }, onText: { [weak self] text in
                         guard let self, self.epoch == token else { return }
                         self.translation = text
-                    }, onSubmitted: { [weak self] bytes in self?.recordAudio(bytes) },
+                    }, onSubmitted: { [weak self] bytes in
+                        guard let self, self.epoch == token else { return }; self.recordAudio(bytes)
+                    },
                     onLevel: { [weak self] level in
                         guard let self, self.epoch == token else { return }; self.addLevel(level)
                     }, onInputText: { [weak self] text in
@@ -213,8 +215,10 @@ import UIKit
                 submittedRealtimeAudio = result.submittedAudio; canReviewInput = submittedRealtimeAudio != nil
                 realtimeStats = (language == "ru" ? "Русский → Deutsch · подтверждено OpenAI" : "Deutsch → Русский · подтверждено OpenAI")
                 realtimeStats += String(format: "\nОтправлено %.1f с аудио", result.inputSeconds)
+                realtimeStats += String(format: " · Записано %.1f с", result.capturedSeconds)
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
                 realtimeStats += String(format: "\nПропущено тихих краёв: до %.1f с · после %.1f с", result.removedLeading, result.removedTrailing)
+                realtimeStats += "\nОтвет завершён сервером · Частей текста: \(result.transcriptParts) · звука: \(result.audioParts)"
                 if reviewResponse {
                     realtimeStats += result.inputLevel < 0.001 ? "\nОтправленный звук микрофона почти беззвучный." : "\nВ отправленном аудио есть звук. Текст перевода от OpenAI не получен."
                 }
@@ -365,10 +369,11 @@ struct InterpreterView: View {
                     }
                     if vm.realtimeMode && vm.reviewResponse {
                         Button("Проверить исходный ответ · бесплатно") { vm.playOriginal() }.disabled(vm.busy && vm.phase != .playing)
-                        if vm.canReviewInput {
-                            Button("Послушать отправленную запись · бесплатно") { vm.playSubmitted() }.disabled(vm.busy && vm.phase != .playing)
-                        }
                         Text("В ответе нет текста перевода. Исходный звук сохранён в памяти без обрезки; он может содержать тишину.").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if vm.realtimeMode && vm.canReviewInput {
+                        Button("Послушать отправленную запись · бесплатно") { vm.playSubmitted() }.disabled(vm.busy && vm.phase != .playing)
+                        Text("Это точная запись, отправленная в этой фразе. Прослушивание на iPhone, без нового запроса.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
                 Text(appVersion).font(.caption2).foregroundStyle(.secondary)
@@ -379,7 +384,7 @@ struct InterpreterView: View {
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .onChange(of: keepScreenAwake) { _, _ in updateScreenAwake() }
         .onChange(of: vm.realtimeMode) { _, _ in vm.modeChanged() }
-        .onChange(of: vm.source) { _, _ in if !vm.busy { vm.restored = ""; vm.translation = "" } }
+        .onChange(of: vm.source) { _, _ in if !vm.realtimeMode && !vm.busy { vm.restored = ""; vm.translation = "" } }
         .onChange(of: scenePhase) { _, phase in
             updateScreenAwake()
             if phase == .background { vm.cancel() }

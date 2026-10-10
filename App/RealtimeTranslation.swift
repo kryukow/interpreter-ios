@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
-    struct Result { let text: String; let audio: Data; let originalAudio: Data; let submittedAudio: Data?; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
+    struct Result { let text: String; let audio: Data; let originalAudio: Data; let submittedAudio: Data?; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let capturedSeconds: Double; let transcriptParts: Int; let audioParts: Int; let firstOutputSeconds: Double? }
     private let microphone = RealtimeMicrophone()
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -25,6 +25,8 @@ import Foundation
         var inputBytes = 0
         var inputLevel = 0.0
         var submittedPCM = Data()
+        var capturedBytes = 0, transcriptParts = 0, audioParts = 0
+        var closeRequested = false
         var request = URLRequest(url: RealtimeProtocol.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
@@ -75,6 +77,7 @@ import Foundation
                             for try await chunk in chunks {
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
+                                capturedBytes += chunk.count
                                 let level = chunk.withUnsafeBytes { raw -> Double in
                                     let samples = raw.bindMemory(to: Int16.self)
                                     guard !samples.isEmpty else { return 0 }
@@ -98,6 +101,7 @@ import Foundation
                                 try await socket.send(.string(try RealtimeProtocol.append(tail)))
                                 inputBytes += tail.count; submittedPCM.append(tail); onSubmitted(tail.count)
                             }
+                            closeRequested = true
                             try await socket.send(.string("{\"type\":\"session.close\"}"))
                             self.armTimeout(socket, token: token, seconds: 25)
                         } catch {
@@ -108,16 +112,23 @@ import Foundation
                     // A stalled send/receive must not leave an open paid session indefinitely.
                     armTimeout(socket, token: token, seconds: 90)
                 case .transcript(let delta):
+                    transcriptParts += 1
                     if firstOutput == nil, let started { firstOutput = Date().timeIntervalSince(started) }
                     text += delta
                     guard text.utf8.count <= 100_000 else { throw Failure.message("Слишком длинный ответ голосового перевода.") }
                     onText(text)
                 case .audio(let delta):
+                    audioParts += 1
                     if firstOutput == nil, let started { firstOutput = Date().timeIntervalSince(started) }
                     guard audio.count + delta.count <= 12_000_000 else { throw Failure.message("Слишком длинный голосовой ответ.") }
                     audio.append(delta)
                 case .closed:
                     guard configured else { throw Failure.message("OpenAI закрыл сессию до начала перевода.") }
+                    guard closeRequested else { throw Failure.message("Сессия завершилась до отправки всей записи. Ответ не используется как полный перевод.") }
+                    await sending?.value
+                    try Task.checkCancellation()
+                    guard generation == token else { throw CancellationError() }
+                    guard inputBytes >= capturedBytes else { throw Failure.message("Запись отправлена не полностью. Ответ не используется как полный перевод.") }
                     completed = true
                 case .failure(let message): throw Failure.message(message)
                 case .other: break
@@ -127,12 +138,14 @@ import Foundation
             let clip = PlaybackClip.trim(audio)
             let original = try RealtimeProtocol.wav(audio)
             let needsReview = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-            let submittedAudio = needsReview && !submittedPCM.isEmpty ? try RealtimeProtocol.wav(submittedPCM) : nil
+            let submittedAudio = !submittedPCM.isEmpty ? try RealtimeProtocol.wav(submittedPCM) : nil
             // Do not trim an untranslated response. Preserve it for free local review.
             return Result(text: text, audio: try RealtimeProtocol.wav(clip.pcm),
                           originalAudio: original, submittedAudio: submittedAudio, needsReview: needsReview, inputLevel: inputLevel,
                           removedLeading: clip.leading, removedTrailing: clip.trailing,
-                          inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond), firstOutputSeconds: firstOutput)
+                          inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond),
+                          capturedSeconds: Double(capturedBytes) / Double(RealtimeProtocol.bytesPerSecond),
+                          transcriptParts: transcriptParts, audioParts: audioParts, firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
         catch is CancellationError { throw CancellationError() }
         catch {
