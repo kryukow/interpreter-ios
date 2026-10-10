@@ -9,6 +9,10 @@ for path in files:
     if not path.is_file():
         continue
     assert path.suffix.lower() not in {'.p12', '.mobileprovision', '.ipa', '.pem', '.key'}, path
+    if path.suffix.lower() == '.png':
+        assert path.relative_to(root).as_posix() == 'App/Assets.xcassets/AppIcon.appiconset/AppIcon.png', path
+        assert path.read_bytes().startswith(b'\x89PNG\r\n\x1a\n'), path
+        continue
     text = path.read_text(encoding='utf-8')
     secret_pattern = r'\bsk-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{20,}|' + '-----BEGIN ' + r'.*PRIVATE' + ' KEY-----'
     assert not re.search(secret_pattern, text), path
