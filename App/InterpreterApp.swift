@@ -17,6 +17,7 @@ import SafariServices
     @Published var account = ""
     @Published var model = UserDefaults.standard.string(forKey: "model") ?? ""
     private let capture = SpeechCapture()
+    let voices = VoicePreferences()
     private let speaker = AVSpeechSynthesizer()
     private var activeUtterance: AVSpeechUtterance?
     private var work: Task<Void, Never>?
@@ -75,14 +76,17 @@ import SafariServices
     }
     func speak() {
         guard phase == .idle, !translation.isEmpty else { return }
+        voices.refresh()
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.playback, mode: .spokenAudio)
             try session.setActive(true)
-            guard let voice = AVSpeechSynthesisVoice(language: language == "ru" ? "de-DE" : "ru-RU") else {
+            guard let voice = voices.voice(for: language == "ru" ? "de-DE" : "ru-RU") else {
                 throw Failure.message("Голос озвучки недоступен. Перевод показан на экране.")
             }
             let utterance = AVSpeechUtterance(string: translation); utterance.voice = voice
+            utterance.rate = voices.speechRate
+            utterance.pitchMultiplier = 1.0
             activeUtterance = utterance
             phase = .playing; message = "Звучит перевод"; speaker.speak(utterance)
         } catch { message = error.localizedDescription }
@@ -172,6 +176,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                VoiceSettingsView(preferences: vm.voices)
                 Section("ChatGPT") {
                     Text(vm.account.isEmpty ? "Вход не выполнен" : vm.account)
                     Button("Войти через ChatGPT") {

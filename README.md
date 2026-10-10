@@ -1,4 +1,6 @@
-# Interpreter 0.3.0 — Russian ↔ German
+# Interpreter 0.3.1 — Russian ↔ German
+
+Voice settings choose the best installed voice automatically (premium, then enhanced, then compact), or let you select a voice separately for Russian and German. Listen to samples and adjust the rate before translating. Download additional voices through iPhone Settings; the app refreshes its list when returning to the foreground. An unavailable saved voice falls back to the best installed voice of the same language.
 
 iPhone prototype. Two explicit language buttons replace automatic direction guessing and duplicate paid audio channels.
 
@@ -23,6 +25,6 @@ xcodebuild -project Interpreter.xcodeproj -scheme Interpreter -destination 'gene
 
 ## Current validation
 
-Source prepared on Windows. Xcode compilation, sign-in, model entitlement, speech recognition quality, and voice playback on the actual iPhone are **not yet verified**. The model list is a catalog, not proof of inference access. First publication should trigger the workflow; only a successful build confirms compilation.
+Version 0.3.0 compiled for simulator and iPhone and passed stream tests. Its sign-in and translation were confirmed by the owner on iPhone. Version 0.3.1 adds configurable installed voices; compilation is verified by its workflow, and actual voice availability and sound quality still require testing on the device. The model list is a catalog, not proof of inference access.
 
 On-device acceptance: test both directions, short words, names, numbers, quiet and noisy environments; deny microphone permission; cancel recording and translation; retry after a failed request; background the app; verify that playback is never captured by the microphone. Check transcription separately from translation.
