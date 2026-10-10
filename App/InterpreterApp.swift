@@ -23,6 +23,7 @@ import UIKit
     @Published var reviewResponse = false
     @Published var reviewingOriginal = false
     @Published var playbackTiming = ""
+    @Published var canReviewInput = false
     @Published var heldLanguage: String?
     @Published var soundLevels = Array(repeating: CGFloat(0), count: 40)
     private func addLevel(_ level: Double) {
@@ -36,6 +37,7 @@ import UIKit
     private let realtime = RealtimeTranslation()
     private var realtimeAudio: Data?
     private var originalRealtimeAudio: Data?
+    private var submittedRealtimeAudio: Data?
     private let capture = SpeechCapture()
     let voices = VoicePreferences()
     private let speaker = AVSpeechSynthesizer()
@@ -179,6 +181,7 @@ import UIKit
         guard phase == .idle else { return }
         self.language = language; source = ""; translation = ""; restored = ""
         realtimeAudio = nil; originalRealtimeAudio = nil; reviewResponse = false; reviewingOriginal = false; realtimeStats = ""
+        submittedRealtimeAudio = nil; canReviewInput = false
         phase = .starting; message = "Подключаю голосовой перевод…"
         let token = epoch
         work = Task {
@@ -207,6 +210,7 @@ import UIKit
                 guard epoch == token else { return }
                 translation = result.text; realtimeAudio = result.audio
                 originalRealtimeAudio = result.originalAudio; reviewResponse = result.needsReview
+                submittedRealtimeAudio = result.submittedAudio; canReviewInput = submittedRealtimeAudio != nil
                 realtimeStats = (language == "ru" ? "Русский → Deutsch · подтверждено OpenAI" : "Deutsch → Русский · подтверждено OpenAI")
                 realtimeStats += String(format: "\nОтправлено %.1f с аудио", result.inputSeconds)
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
@@ -246,9 +250,24 @@ import UIKit
         reviewingOriginal = true; speakRealtime()
     }
     func replay() { reviewingOriginal = false; speak() }
+    func playSubmitted() {
+        guard phase == .idle || phase == .playing, let audio = submittedRealtimeAudio else { return }
+        do {
+            phase = .playing; message = "Звучит запись, отправленная в OpenAI"
+            let token = epoch
+            try realtime.play(audio, onStarted: { [weak self] delay in
+                guard let self, self.epoch == token else { return }
+                self.playbackTiming = String(format: "Запуск плеера: %.2f с", delay)
+            }) { [weak self] in
+                guard let self, self.epoch == token else { return }
+                self.phase = .idle; self.message = "Запись проверена. Перевод пока не получен."
+            }
+        } catch { phase = .idle; message = error.localizedDescription }
+    }
     var canReplay: Bool { realtimeMode ? realtimeAudio != nil : !translation.isEmpty }
     func modeChanged() {
         cancel(); source = ""; translation = ""; restored = ""; realtimeAudio = nil; originalRealtimeAudio = nil; reviewResponse = false; realtimeStats = ""
+        submittedRealtimeAudio = nil; canReviewInput = false
         UserDefaults.standard.set(realtimeMode, forKey: "realtimeMode")
         message = realtimeMode ? "Голосовой перевод API · выбери язык" : "Выбери язык и произнеси фразу"
     }
@@ -342,6 +361,9 @@ struct InterpreterView: View {
                     }
                     if vm.realtimeMode && vm.reviewResponse {
                         Button("Проверить исходный ответ · бесплатно") { vm.playOriginal() }.disabled(vm.busy && vm.phase != .playing)
+                        if vm.canReviewInput {
+                            Button("Послушать отправленную запись · бесплатно") { vm.playSubmitted() }.disabled(vm.busy && vm.phase != .playing)
+                        }
                         Text("В ответе нет текста перевода. Исходный звук сохранён в памяти без обрезки; он может содержать тишину.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))

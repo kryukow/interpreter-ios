@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
-    struct Result { let text: String; let audio: Data; let originalAudio: Data; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
+    struct Result { let text: String; let audio: Data; let originalAudio: Data; let submittedAudio: Data?; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
     private let microphone = RealtimeMicrophone()
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -24,6 +24,7 @@ import Foundation
         let token = generation
         var inputBytes = 0
         var inputLevel = 0.0
+        var submittedPCM = Data()
         var request = URLRequest(url: RealtimeProtocol.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
@@ -86,7 +87,7 @@ import Foundation
                                     try Task.checkCancellation()
                                     guard self.generation == token else { throw CancellationError() }
                                     try await socket.send(.string(try RealtimeProtocol.append(frame)))
-                                    inputBytes += frame.count; onSubmitted(frame.count)
+                                    inputBytes += frame.count; submittedPCM.append(frame); onSubmitted(frame.count)
                                 }
                             }
                             guard self.generation == token, !Task.isCancelled else { return }
@@ -95,7 +96,7 @@ import Foundation
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
                                 try await socket.send(.string(try RealtimeProtocol.append(tail)))
-                                inputBytes += tail.count; onSubmitted(tail.count)
+                                inputBytes += tail.count; submittedPCM.append(tail); onSubmitted(tail.count)
                             }
                             try await socket.send(.string("{\"type\":\"session.close\"}"))
                             self.armTimeout(socket, token: token, seconds: 25)
@@ -126,9 +127,10 @@ import Foundation
             let clip = PlaybackClip.trim(audio)
             let original = try RealtimeProtocol.wav(audio)
             let needsReview = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let submittedAudio = needsReview && !submittedPCM.isEmpty ? try RealtimeProtocol.wav(submittedPCM) : nil
             // Do not trim an untranslated response. Preserve it for free local review.
             return Result(text: text, audio: try RealtimeProtocol.wav(clip.pcm),
-                          originalAudio: original, needsReview: needsReview, inputLevel: inputLevel,
+                          originalAudio: original, submittedAudio: submittedAudio, needsReview: needsReview, inputLevel: inputLevel,
                           removedLeading: clip.leading, removedTrailing: clip.trailing,
                           inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond), firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
