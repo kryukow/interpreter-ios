@@ -1,12 +1,18 @@
 import AVFoundation
+import Speech
 
 @MainActor final class RealtimeMicrophone {
     private var engine: AVAudioEngine?
     private var continuation: AsyncThrowingStream<Data, Error>.Continuation?
     private var deadline: Task<Void, Never>?
+    private var diagnosticTask: SFSpeechRecognitionTask?
+    private var diagnosticRecognizer: SFSpeechRecognizer?
+    private var diagnosticRequest: SFSpeechAudioBufferRecognitionRequest?
+    private var generation = UUID()
 
-    func start() async throws -> AsyncThrowingStream<Data, Error> {
+    func start(locale: String, onInputText: @escaping (String) -> Void) async throws -> AsyncThrowingStream<Data, Error> {
         stop()
+        let token = generation
         let allowed = await AVCaptureDevice.requestAccess(for: .audio)
         try Task.checkCancellation()
         guard allowed else { throw Failure.message("Разреши микрофон в настройках iPhone.") }
@@ -24,9 +30,27 @@ import AVFoundation
         let stream = AsyncThrowingStream<Data, Error>(bufferingPolicy: .bufferingOldest(128)) { streamContinuation = $0 }
         let delivery = streamContinuation!
         continuation = delivery
+        // Optional microphone check, strictly on-device and never a second API call.
+        var diagnostic: SFSpeechAudioBufferRecognitionRequest?
+        if SFSpeechRecognizer.authorizationStatus() == .authorized,
+           let recognizer = SFSpeechRecognizer(locale: Locale(identifier: locale)),
+           recognizer.isAvailable, recognizer.supportsOnDeviceRecognition {
+            let request = SFSpeechAudioBufferRecognitionRequest()
+            request.requiresOnDeviceRecognition = true; request.shouldReportPartialResults = true
+            diagnostic = request; diagnosticRequest = request
+            diagnosticRecognizer = recognizer
+            diagnosticTask = recognizer.recognitionTask(with: request) { [weak self] result, _ in
+                guard let text = result?.bestTranscription.formattedString else { return }
+                Task { @MainActor in
+                    guard let self, self.generation == token else { return }; onInputText(text)
+                }
+            }
+        }
+        let diagnosticBuffer = diagnostic
         // The converter is confined to the audio tap, never used on another thread.
         var totalBytes = 0
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
+            diagnosticBuffer?.append(buffer)
             let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * target.sampleRate / format.sampleRate) + 64)
             guard let output = AVAudioPCMBuffer(pcmFormat: target, frameCapacity: capacity) else { return }
             var supplied = false, conversionError: NSError?
@@ -59,6 +83,9 @@ import AVFoundation
         return stream
     }
     func stop() {
+        generation = UUID()
+        diagnosticRequest?.endAudio(); diagnosticTask?.cancel()
+        diagnosticTask = nil; diagnosticRequest = nil; diagnosticRecognizer = nil
         deadline?.cancel(); deadline = nil
         if let engine { engine.stop(); engine.inputNode.removeTap(onBus: 0) }
         engine = nil

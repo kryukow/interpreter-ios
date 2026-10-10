@@ -20,6 +20,8 @@ import UIKit
     @Published var model = UserDefaults.standard.string(forKey: "model") ?? ""
     @Published var realtimeMode = UserDefaults.standard.bool(forKey: "realtimeMode")
     @Published var realtimeStats = ""
+    @Published var reviewResponse = false
+    @Published var reviewingOriginal = false
     @Published var heldLanguage: String?
     @Published var soundLevels = Array(repeating: CGFloat(0), count: 40)
     private func addLevel(_ level: Double) {
@@ -32,6 +34,7 @@ import UIKit
     }()
     private let realtime = RealtimeTranslation()
     private var realtimeAudio: Data?
+    private var originalRealtimeAudio: Data?
     private let capture = SpeechCapture()
     let voices = VoicePreferences()
     private let speaker = AVSpeechSynthesizer()
@@ -174,7 +177,7 @@ import UIKit
         }
         guard phase == .idle else { return }
         self.language = language; source = ""; translation = ""; restored = ""
-        realtimeAudio = nil; realtimeStats = ""
+        realtimeAudio = nil; originalRealtimeAudio = nil; reviewResponse = false; reviewingOriginal = false; realtimeStats = ""
         phase = .starting; message = "Подключаю голосовой перевод…"
         let token = epoch
         work = Task {
@@ -183,7 +186,7 @@ import UIKit
                 guard let key = try RealtimeKeyStore.load(), !key.isEmpty else {
                     throw Failure.message("Добавь API-ключ в настройках → Голосовой перевод API.")
                 }
-                let result = try await realtime.run(key: key, target: language == "ru" ? "de" : "ru",
+                let result = try await realtime.run(key: key, source: language, target: language == "ru" ? "de" : "ru",
                     onReady: { [weak self] in
                         guard let self, self.epoch == token else { return }
                         self.phase = .listening; self.message = "Говори. Отпусти кнопку — прозвучит перевод"
@@ -197,13 +200,24 @@ import UIKit
                     }, onSubmitted: { [weak self] bytes in self?.recordAudio(bytes) },
                     onLevel: { [weak self] level in
                         guard let self, self.epoch == token else { return }; self.addLevel(level)
+                    }, onInputText: { [weak self] text in
+                        guard let self, self.epoch == token else { return }; self.source = text
                     })
                 guard epoch == token else { return }
                 translation = result.text; realtimeAudio = result.audio
-                realtimeStats = String(format: "Отправлено %.1f с аудио", result.inputSeconds)
+                originalRealtimeAudio = result.originalAudio; reviewResponse = result.needsReview
+                realtimeStats = (language == "ru" ? "Русский → Deutsch · подтверждено OpenAI" : "Deutsch → Русский · подтверждено OpenAI")
+                realtimeStats += String(format: "\nОтправлено %.1f с аудио", result.inputSeconds)
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
                 realtimeStats += String(format: "\nПропущено тихих краёв: до %.1f с · после %.1f с", result.removedLeading, result.removedTrailing)
-                heldLanguage = nil; phase = .idle; speakRealtime()
+                if reviewResponse {
+                    realtimeStats += result.inputLevel < 0.001 ? "\nОтправленный звук микрофона почти беззвучный." : "\nВ отправленном аудио есть звук. Текст перевода от OpenAI не получен."
+                }
+                heldLanguage = nil; phase = .idle
+                if reviewResponse {
+                    realtimeAudio = nil
+                    message = "OpenAI не вернул текст перевода. Можно проверить исходный звук ответа без нового запроса."
+                } else { speakRealtime() }
             } catch {
                 guard epoch == token else { return }
                 realtime.cancel(); realtimeAudio = nil; translation = ""
@@ -212,19 +226,24 @@ import UIKit
         }
     }
     private func speakRealtime() {
-        guard let audio = realtimeAudio else { return }
+        guard let audio = reviewingOriginal ? originalRealtimeAudio : realtimeAudio else { return }
         do {
-            phase = .playing; message = "Звучит голосовой перевод OpenAI"
+            phase = .playing; message = reviewingOriginal ? "Звучит исходный ответ OpenAI" : "Звучит голосовой перевод OpenAI"
             let token = epoch
             try realtime.play(audio) { [weak self] in
                 guard let self, self.epoch == token else { return }
-                self.phase = .idle; self.message = "Готово. Выбери язык следующей фразы"
+                self.phase = .idle; self.message = self.reviewResponse ? "Перевод не получен. Можно начать новую фразу." : "Готово. Выбери язык следующей фразы"
             }
         } catch { phase = .idle; message = error.localizedDescription }
     }
+    func playOriginal() {
+        guard phase == .idle || phase == .playing, originalRealtimeAudio != nil else { return }
+        reviewingOriginal = true; speakRealtime()
+    }
+    func replay() { reviewingOriginal = false; speak() }
     var canReplay: Bool { realtimeMode ? realtimeAudio != nil : !translation.isEmpty }
     func modeChanged() {
-        cancel(); source = ""; translation = ""; restored = ""; realtimeAudio = nil; realtimeStats = ""
+        cancel(); source = ""; translation = ""; restored = ""; realtimeAudio = nil; originalRealtimeAudio = nil; reviewResponse = false; realtimeStats = ""
         UserDefaults.standard.set(realtimeMode, forKey: "realtimeMode")
         message = realtimeMode ? "Голосовой перевод API · выбери язык" : "Выбери язык и произнеси фразу"
     }
@@ -290,6 +309,11 @@ struct InterpreterView: View {
                         Text("ГОЛОС → ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
                         Text("Модель переводит непосредственно аудио. Текст появится по мере перевода, голос прозвучит после завершения записи.").font(.footnote).foregroundStyle(.secondary)
                         if !vm.realtimeStats.isEmpty { Text(vm.realtimeStats).font(.footnote).foregroundStyle(.secondary) }
+                        if !vm.source.isEmpty {
+                            Text("ПРОВЕРКА МИКРОФОНА · \(vm.language == "ru" ? "РУССКИЙ" : "DEUTSCH")").font(.caption).foregroundStyle(.secondary)
+                            Text(vm.source).font(.footnote).textSelection(.enabled)
+                            Text("Распознано на iPhone. OpenAI получает исходный голос.").font(.caption2).foregroundStyle(.secondary)
+                        }
                     } else {
                     Text("УСЛЫШАЛА · \(vm.language == "ru" ? "РУССКИЙ" : "DEUTSCH")").font(.caption).foregroundStyle(.secondary)
                     TextEditor(text: $vm.source).frame(minHeight: 90).scrollContentBackground(.hidden).disabled(vm.busy)
@@ -307,8 +331,13 @@ struct InterpreterView: View {
                     }
                     Text("ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
                     Text(vm.translation.isEmpty ? "—" : vm.translation).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Прослушать снова") { vm.speak() }.disabled((vm.busy && !(vm.realtimeMode && vm.phase == .playing)) || !vm.canReplay)
+                    Button("Прослушать снова") { vm.replay() }.disabled((vm.busy && !(vm.realtimeMode && vm.phase == .playing)) || !vm.canReplay)
+                    if vm.realtimeMode && vm.reviewResponse {
+                        Button("Проверить исходный ответ · бесплатно") { vm.playOriginal() }.disabled(vm.busy && vm.phase != .playing)
+                        Text("В ответе нет текста перевода. Исходный звук сохранён в памяти без обрезки; он может содержать тишину.").font(.footnote).foregroundStyle(.secondary)
+                    }
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
+                Text(appVersion).font(.caption2).foregroundStyle(.secondary)
             }.padding(24)
         }.background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { SettingsView(vm: vm) }
@@ -332,6 +361,11 @@ struct InterpreterView: View {
             onCancel: { vm.holdCancel(language) })
             .frame(maxWidth: .infinity).frame(height: 170)
     }
+}
+
+private var appVersion: String {
+    let info = Bundle.main.infoDictionary ?? [:]
+    return "Interpreter \(info["CFBundleShortVersionString"] as? String ?? "—") (\(info["CFBundleVersion"] as? String ?? "—"))"
 }
 
 struct SettingsView: View {
@@ -414,6 +448,7 @@ struct SettingsView: View {
                     Text("В режиме подписки восстановление смысла и перевод выполняются двумя запросами через лимиты ChatGPT. Аудио в OpenAI не отправляется: туда уходит только текст. В голосовом режиме API в OpenAI передаётся аудио.")
                     Text("Распознавание выполняется на устройстве, если язык поддерживается. Иначе iPhone может использовать сервер Apple. Качество проверим на реальных фразах.")
                 }.font(.footnote)
+                Section { Text(appVersion).font(.caption).foregroundStyle(.secondary) }
             }.navigationTitle("Настройки").tint(.white)
                 .toolbar { Button("Готово") { dismiss() }.disabled(busy) }
                 .interactiveDismissDisabled(busy)

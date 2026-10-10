@@ -8,6 +8,11 @@ import Foundation
         let audio = session["audio"] as! [String: Any]
         precondition((audio["output"] as! [String: Any])["language"] as? String == "de")
         precondition((audio["input"] as! [String: Any])["transcription"] == nil, "no second billed transcription model")
+        let russian = try JSONSerialization.jsonObject(with: Data(try RealtimeProtocol.configuration(target: "ru").utf8)) as! [String: Any]
+        let ruAudio = (russian["session"] as! [String: Any])["audio"] as! [String: Any]
+        precondition((ruAudio["output"] as! [String: Any])["language"] as? String == "ru", "German input requests Russian output")
+        let updatedRU = try RealtimeProtocol.event(Data("{\"type\":\"session.updated\",\"session\":{\"model\":\"gpt-realtime-translate\",\"audio\":{\"output\":{\"language\":\"ru\"}}}}".utf8))
+        guard case .updated("ru") = updatedRU else { fatalError("Russian confirmation lost") }
         let pcm = Data([0, 0, 255, 127, 0, 128, 1, 0])
         let appended = try JSONSerialization.jsonObject(with: Data(try RealtimeProtocol.append(pcm).utf8)) as! [String: Any]
         precondition(appended["type"] as? String == "session.input_audio_buffer.append")

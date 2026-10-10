@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
-    struct Result { let text: String; let audio: Data; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
+    struct Result { let text: String; let audio: Data; let originalAudio: Data; let needsReview: Bool; let inputLevel: Double; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
     private let microphone = RealtimeMicrophone()
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -15,13 +15,15 @@ import Foundation
     private var playbackFinished: (() -> Void)?
     private var playbackWatch: Task<Void, Never>?
 
-    func run(key: String, target: String, onReady: @escaping () -> Void,
+    func run(key: String, source: String, target: String, onReady: @escaping () -> Void,
              onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void,
-             onSubmitted: @escaping (Int) -> Void, onLevel: @escaping (Double) -> Void) async throws -> Result {
+             onSubmitted: @escaping (Int) -> Void, onLevel: @escaping (Double) -> Void,
+             onInputText: @escaping (String) -> Void) async throws -> Result {
         try Task.checkCancellation()
         cancel()
         let token = generation
         var inputBytes = 0
+        var inputLevel = 0.0
         var request = URLRequest(url: RealtimeProtocol.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
@@ -61,7 +63,7 @@ import Foundation
                     guard !configured else { continue }
                     guard language == target else { throw Failure.message("OpenAI не подтвердил нужный язык перевода.") }
                     timeout?.cancel()
-                    let chunks = try await microphone.start()
+                    let chunks = try await microphone.start(locale: source == "ru" ? "ru-RU" : "de-DE", onInputText: onInputText)
                     try Task.checkCancellation()
                     guard generation == token else { throw CancellationError() }
                     configured = true; started = Date(); onReady()
@@ -78,6 +80,7 @@ import Foundation
                                     return min(1, sqrt(power / Double(samples.count)) * 8)
                                 }
                                 onLevel(level)
+                                inputLevel = max(inputLevel, level)
                                 try await socket.send(.string(try RealtimeProtocol.append(chunk)))
                                 inputBytes += chunk.count
                                 onSubmitted(chunk.count)
@@ -111,7 +114,11 @@ import Foundation
             }
             guard !audio.isEmpty else { throw Failure.message("Голосовой перевод не получен. Попробуй короткую чёткую фразу.") }
             let clip = PlaybackClip.trim(audio)
+            let original = try RealtimeProtocol.wav(audio)
+            let needsReview = text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            // Do not trim an untranslated response. Preserve it for free local review.
             return Result(text: text, audio: try RealtimeProtocol.wav(clip.pcm),
+                          originalAudio: original, needsReview: needsReview, inputLevel: inputLevel,
                           removedLeading: clip.leading, removedTrailing: clip.trailing,
                           inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond), firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
@@ -174,7 +181,7 @@ import Foundation
         }
     }
     private func finishPlayback(_ player: AVAudioPlayer) {
-        guard self.player === player else { return }
+        guard self.player === player, !player.isPlaying, playbackFinished != nil else { return }
         playbackWatch?.cancel(); playbackWatch = nil
         let callback = playbackFinished; playbackFinished = nil
         callback?()
