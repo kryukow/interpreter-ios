@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import SafariServices
+import UIKit
 
 @main struct InterpreterApp: App {
     var body: some Scene { WindowGroup { InterpreterView().preferredColorScheme(.dark) } }
@@ -11,6 +12,7 @@ import SafariServices
     @Published var phase: Phase = .idle
     @Published var source = ""
     @Published var translation = ""
+    @Published var restored = ""
     @Published var language = "ru"
     @Published var message = "Выбери язык и произнеси фразу"
     @Published var models: [ModelChoice] = []
@@ -31,7 +33,7 @@ import SafariServices
             return
         }
         guard phase == .idle else { return }
-        self.language = language; source = ""; translation = ""
+        self.language = language; source = ""; translation = ""; restored = ""
         phase = .starting; message = "Включаю микрофон…"
         let token = epoch
         work = Task {
@@ -56,13 +58,18 @@ import SafariServices
     func translate() {
         guard phase == .idle else { return }
         let text = source, target = language == "ru" ? "German" : "Russian"
+        let sourceLanguage = language == "ru" ? "Russian" : "German"
         let token = epoch
-        phase = .translating; translation = ""; message = "Перевожу…"
+        phase = .translating; translation = ""; restored = ""; message = "Восстанавливаю смысл…"
         work = Task {
             do {
                 guard let stored = try SessionStore.load() else { throw Failure.message("Войди в ChatGPT в настройках.") }
                 let session = try await OpenAI.refresh(stored)
-                let result = try await Translation.run(text, target: target, model: model, session: session) { [weak self] update in
+                let repaired = try await Translation.restore(text, language: sourceLanguage, model: model, session: session)
+                try Task.checkCancellation()
+                guard epoch == token else { return }
+                restored = repaired; message = "Перевожу…"
+                let result = try await Translation.run(repaired, target: target, model: model, session: session) { [weak self] update in
                     guard let self, self.epoch == token else { return }; self.translation = update
                 }
                 guard epoch == token else { return }
@@ -118,6 +125,7 @@ struct InterpreterView: View {
     @StateObject private var vm = Conversation()
     @State private var settings = false
     @Environment(\.scenePhase) private var scenePhase
+    @AppStorage("keepScreenAwake") private var keepScreenAwake = true
     var body: some View {
         ScrollView {
             VStack(spacing: 24) {
@@ -147,6 +155,11 @@ struct InterpreterView: View {
                         if !vm.source.isEmpty { Text("Можно исправить").font(.caption).foregroundStyle(.secondary) }
                     }
                     Divider()
+                    if !vm.restored.isEmpty {
+                        Text("ПОНЯЛА ПО СМЫСЛУ").font(.caption).foregroundStyle(.secondary)
+                        Text(vm.restored).textSelection(.enabled)
+                        Divider()
+                    }
                     Text("ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
                     Text(vm.translation.isEmpty ? "—" : vm.translation).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     Button("Прослушать снова") { vm.speak() }.disabled(vm.busy || vm.translation.isEmpty)
@@ -154,7 +167,17 @@ struct InterpreterView: View {
             }.padding(24)
         }.background(Color(red: 0.035, green: 0.06, blue: 0.09))
         .sheet(isPresented: $settings) { SettingsView(vm: vm) }
-        .onChange(of: scenePhase) { _, phase in if phase == .background { vm.cancel() } }
+        .onAppear { updateScreenAwake() }
+        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
+        .onChange(of: keepScreenAwake) { _, _ in updateScreenAwake() }
+        .onChange(of: vm.source) { _, _ in if !vm.busy { vm.restored = ""; vm.translation = "" } }
+        .onChange(of: scenePhase) { _, phase in
+            updateScreenAwake()
+            if phase == .background { vm.cancel() }
+        }
+    }
+    private func updateScreenAwake() {
+        UIApplication.shared.isIdleTimerDisabled = keepScreenAwake && scenePhase == .active
     }
     func languageButton(_ title: String, language: String) -> some View {
         Button { vm.tap(language) } label: {
@@ -168,6 +191,7 @@ struct InterpreterView: View {
 }
 
 struct SettingsView: View {
+    @AppStorage("keepScreenAwake") private var keepScreenAwake = true
     @ObservedObject var vm: Conversation
     @StateObject private var login = Login()
     @State private var busy = false
@@ -176,6 +200,10 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section("Экран") {
+                    Toggle("Не гасить экран", isOn: $keepScreenAwake)
+                    Text("Экран остаётся включённым, пока Interpreter открыт. При сворачивании обычная автоблокировка возвращается.").font(.footnote)
+                }
                 VoiceSettingsView(preferences: vm.voices)
                 Section("ChatGPT") {
                     Text(vm.account.isEmpty ? "Вход не выполнен" : vm.account)
@@ -198,7 +226,7 @@ struct SettingsView: View {
                     Text(message.isEmpty ? login.message : message).font(.footnote)
                 }
                 Section {
-                    Text("Перевод использует лимиты твоей подписки ChatGPT. Аудио в OpenAI не отправляется: туда уходит только распознанный текст.")
+                    Text("Восстановление смысла и перевод выполняются двумя запросами через лимиты твоей подписки ChatGPT. Это может занять немного больше времени. Аудио в OpenAI не отправляется: туда уходит только текст.")
                     Text("Распознавание выполняется на устройстве, если язык поддерживается. Иначе iPhone может использовать сервер Apple. Качество проверим на реальных фразах.")
                 }.font(.footnote)
             }.navigationTitle("Настройки")
