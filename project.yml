@@ -1,0 +1,28 @@
+name: Interpreter
+options:
+  deploymentTarget:
+    iOS: '18.4'
+settings:
+  base:
+    SWIFT_VERSION: '5.0'
+    MARKETING_VERSION: '0.3.0'
+    CURRENT_PROJECT_VERSION: '3'
+    TARGETED_DEVICE_FAMILY: '1'
+targets:
+  Interpreter:
+    type: application
+    platform: iOS
+    sources: [App]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: org.interpreter.voice
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Interpreter
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: Микрофон нужен для записи фразы, которую ты хочешь перевести.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: Распознавание русской и немецкой речи для перевода.
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+schemes:
+  Interpreter:
+    build:
+      targets:
+        Interpreter: all

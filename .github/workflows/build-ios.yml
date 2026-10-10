@@ -1,0 +1,47 @@
+name: Interpreter iOS
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: interpreter-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test translation stream failures and completion
+        run: |
+          swiftc App/TranslationTextStream.swift scripts/test_translation_stream.swift -o "$RUNNER_TEMP/stream-tests"
+          "$RUNNER_TEMP/stream-tests"
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate project
+        run: xcodegen generate
+      - name: Build simulator
+        run: |
+          xcodebuild -project Interpreter.xcodeproj -scheme Interpreter -configuration Debug \
+            -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Build for iPhone
+        run: |
+          xcodebuild -project Interpreter.xcodeproj -scheme Interpreter -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/Device" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
+      - name: Package unsigned IPA for signing in Feather
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/Device/Build/Products/Release-iphoneos/Interpreter.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-0.3.0-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-0.3.0-Unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Interpreter-0.3.0-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-0.3.0-Unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
