@@ -32,6 +32,7 @@ import UIKit
     }()
     private let realtime = RealtimeTranslation()
     private var realtimeAudio: Data?
+    private var realtimePlaybackStart = 0.0
     private let capture = SpeechCapture()
     let voices = VoicePreferences()
     private let speaker = AVSpeechSynthesizer()
@@ -200,6 +201,7 @@ import UIKit
                     })
                 guard epoch == token else { return }
                 translation = result.text; realtimeAudio = result.audio
+                realtimePlaybackStart = result.playbackStart
                 realtimeStats = String(format: "Отправлено %.1f с аудио", result.inputSeconds)
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
                 heldLanguage = nil; phase = .idle; speakRealtime()
@@ -215,7 +217,7 @@ import UIKit
         do {
             phase = .playing; message = "Звучит голосовой перевод OpenAI"
             let token = epoch
-            try realtime.play(audio) { [weak self] in
+            try realtime.play(audio, start: realtimePlaybackStart) { [weak self] in
                 guard let self, self.epoch == token else { return }
                 self.phase = .idle; self.message = "Готово. Выбери язык следующей фразы"
             }

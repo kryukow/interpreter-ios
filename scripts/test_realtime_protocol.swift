@@ -35,6 +35,15 @@ import Foundation
         guard case .failure(let text) = failure else { fatalError("wrong error event") }
         precondition(!text.contains("private secret"))
         guard case .closed = try RealtimeProtocol.event(Data("{\"type\":\"session.closed\"}".utf8)) else { fatalError("missing completion") }
-        print("PASS: directions, audio append, transcript deltas, PCM16 WAV, invalid audio, safe errors, explicit completion")
+        let silence = Data(repeating: 0, count: 48000 * 6)
+        let quietVoice = Data((0..<2400).flatMap { _ in [UInt8(16), UInt8(0)] })
+        var delayed = silence; delayed.append(quietVoice)
+        precondition(abs(RealtimeProtocol.playbackStart(delayed) - 5.75) < 0.0001)
+        precondition(RealtimeProtocol.playbackStart(silence) == 0)
+        precondition(RealtimeProtocol.playbackStart(quietVoice) == 0)
+        var short = Data(repeating: 0, count: 4800); short.append(quietVoice)
+        precondition(RealtimeProtocol.playbackStart(short) == 0, "preserve onset safety margin")
+        precondition(RealtimeProtocol.playbackStart(Data()) == 0)
+        print("PASS: translation protocol, WAV, conservative playback onset and quiet speech")
     }
 }

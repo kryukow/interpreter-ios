@@ -71,4 +71,22 @@ enum RealtimeProtocol {
         label("data"); u32(UInt32(pcm.count)); result.append(pcm)
         return result
     }
+    // Skip only near-digital silence. Retain 250 ms before even very quiet sound.
+    // No interior pauses are removed, and an entirely silent clip is unchanged.
+    static func playbackStart(_ pcm: Data) -> Double {
+        let bytes = [UInt8](pcm)
+        let window = sampleRate / 100
+        var first: Int?
+        for start in stride(from: 0, to: bytes.count / 2, by: window) {
+            let end = min(start + window, bytes.count / 2)
+            var power = 0.0, peak = 0
+            for index in start..<end {
+                let value = Int(Int16(bitPattern: UInt16(bytes[index * 2]) | UInt16(bytes[index * 2 + 1]) << 8))
+                peak = max(peak, abs(value)); power += Double(value) * Double(value)
+            }
+            if peak > 32 || sqrt(power / Double(end - start)) > 8 { first = start; break }
+        }
+        guard let first else { return 0 }
+        return Double(max(0, first - sampleRate / 4)) / Double(sampleRate)
+    }
 }

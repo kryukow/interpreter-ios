@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
-    struct Result { let text: String; let audio: Data; let inputSeconds: Double; let firstOutputSeconds: Double? }
+    struct Result { let text: String; let audio: Data; let playbackStart: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
     private let microphone = RealtimeMicrophone()
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -10,6 +10,8 @@ import Foundation
     private var timeout: Task<Void, Never>?
     private var generation = UUID()
     private var player: AVAudioPlayer?
+    private var preparedAudio: Data?
+    private var playbackSessionActive = false
     private var playbackFinished: (() -> Void)?
     private var playbackWatch: Task<Void, Never>?
 
@@ -109,6 +111,7 @@ import Foundation
             }
             guard !audio.isEmpty else { throw Failure.message("Голосовой перевод не получен. Попробуй короткую чёткую фразу.") }
             return Result(text: text, audio: try RealtimeProtocol.wav(audio),
+                          playbackStart: RealtimeProtocol.playbackStart(audio),
                           inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond), firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
         catch is CancellationError { throw CancellationError() }
@@ -126,11 +129,21 @@ import Foundation
         }
     }
     func finish() { microphone.stop() }
-    func play(_ audio: Data, onFinished: @escaping () -> Void) throws {
+    func play(_ audio: Data, start: Double, onFinished: @escaping () -> Void) throws {
         microphone.stop()
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playback, mode: .spokenAudio); try session.setActive(true)
-        let player = try AVAudioPlayer(data: audio)
+        if !playbackSessionActive {
+            try session.setCategory(.playback, mode: .spokenAudio); try session.setActive(true)
+            playbackSessionActive = true
+        }
+        let player: AVAudioPlayer
+        if let cached = self.player, preparedAudio == audio { player = cached }
+        else {
+            player = try AVAudioPlayer(data: audio)
+            guard player.prepareToPlay() else { throw Failure.message("Не удалось подготовить голосовой перевод.") }
+            preparedAudio = audio
+        }
+        player.currentTime = max(0, min(start, player.duration))
         player.delegate = self; self.player = player; playbackFinished = onFinished
         guard player.play() else { self.player = nil; playbackFinished = nil; throw Failure.message("Не удалось воспроизвести голос OpenAI.") }
         playbackWatch?.cancel()
@@ -148,6 +161,7 @@ import Foundation
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         session?.invalidateAndCancel(); session = nil
         player?.stop(); player = nil; playbackFinished = nil
+        preparedAudio = nil; playbackSessionActive = false
         playbackWatch?.cancel(); playbackWatch = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
@@ -159,8 +173,8 @@ import Foundation
     private func finishPlayback(_ player: AVAudioPlayer) {
         guard self.player === player else { return }
         playbackWatch?.cancel(); playbackWatch = nil
-        self.player = nil; let callback = playbackFinished; playbackFinished = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        let callback = playbackFinished; playbackFinished = nil
+        player.currentTime = 0; player.prepareToPlay()
         callback?()
     }
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
