@@ -18,6 +18,8 @@ import Foundation
     func run(key: String, source: String, target: String, onReady: @escaping () -> Void,
              onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void,
              onSubmitted: @escaping (Int) -> Void, onLevel: @escaping (Double) -> Void,
+             onUploadProgress: @escaping (Double, Double) -> Void,
+             onSubmittedAudio: @escaping (Data) -> Void, onWaiting: @escaping () -> Void,
              onInputText: @escaping (String) -> Void) async throws -> Result {
         try Task.checkCancellation()
         cancel()
@@ -115,14 +117,18 @@ import Foundation
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
                                 inputBytes += frame.count; submittedPCM.append(frame); onSubmitted(frame.count)
+                                onUploadProgress(Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond),
+                                                 Double(packets.count * PCMFrames.frameBytes) / Double(RealtimeProtocol.bytesPerSecond))
                                 // Same 200 ms pacing as the confirmed working PC control.
                                 try await Task.sleep(nanoseconds: 200_000_000)
                             }
                             guard self.generation == token, !Task.isCancelled else { return }
+                            onSubmittedAudio(try RealtimeProtocol.wav(submittedPCM))
                             closeRequested = true
                             try await socket.send(.string("{\"type\":\"session.close\"}"))
                             try Task.checkCancellation()
                             guard self.generation == token else { throw CancellationError() }
+                            onWaiting()
                             self.armTimeout(socket, token: token, seconds: 25)
                         } catch {
                             guard self.generation == token, !Task.isCancelled else { return }

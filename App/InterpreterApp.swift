@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import SafariServices
 import UIKit
+import UniformTypeIdentifiers
 
 @main struct InterpreterApp: App {
     var body: some Scene { WindowGroup { InterpreterView().preferredColorScheme(.dark) } }
@@ -193,11 +194,11 @@ import UIKit
                 let result = try await realtime.run(key: key, source: language, target: language == "ru" ? "de" : "ru",
                     onReady: { [weak self] in
                         guard let self, self.epoch == token else { return }
-                        self.phase = .listening; self.message = "Говори. Отпусти кнопку — прозвучит перевод"
+                        self.phase = .listening; self.message = "Запись · говори, затем отпусти кнопку"
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
                     }, onFinishing: { [weak self] in
                         guard let self, self.epoch == token else { return }
-                        self.phase = .finishing; self.message = "Отправляю запись и получаю перевод…"
+                        self.phase = .finishing; self.message = "Запись закончена. Подключаю перевод…"
                     }, onText: { [weak self] text in
                         guard let self, self.epoch == token else { return }
                         self.translation = text
@@ -206,6 +207,15 @@ import UIKit
                     },
                     onLevel: { [weak self] level in
                         guard let self, self.epoch == token else { return }; self.addLevel(level)
+                    }, onUploadProgress: { [weak self] sent, total in
+                        guard let self, self.epoch == token else { return }
+                        self.message = String(format: "Отправка записи · %.1f / %.1f с\nМикрофон выключен", sent, total)
+                    }, onSubmittedAudio: { [weak self] audio in
+                        guard let self, self.epoch == token else { return }
+                        self.submittedRealtimeAudio = audio; self.canReviewInput = true
+                    }, onWaiting: { [weak self] in
+                        guard let self, self.epoch == token else { return }
+                        self.phase = .translating; self.message = "Запись отправлена. Ожидаю завершения перевода…"
                     }, onInputText: { [weak self] text in
                         guard let self, self.epoch == token else { return }; self.source = text
                     })
@@ -274,6 +284,7 @@ import UIKit
         } catch { phase = .idle; message = error.localizedDescription }
     }
     var canReplay: Bool { realtimeMode ? realtimeAudio != nil : !translation.isEmpty }
+    var submittedRecording: WaveRecording? { submittedRealtimeAudio.map { WaveRecording(data: $0) } }
     func modeChanged() {
         cancel(); source = ""; translation = ""; restored = ""; realtimeAudio = nil; originalRealtimeAudio = nil; reviewResponse = false; realtimeStats = ""
         submittedRealtimeAudio = nil; canReviewInput = false
@@ -299,6 +310,8 @@ import UIKit
 struct InterpreterView: View {
     @StateObject private var vm = Conversation()
     @State private var settings = false
+    @State private var exportRecording = false
+    @State private var recordingDocument: WaveRecording?
     @Environment(\.scenePhase) private var scenePhase
     @AppStorage("keepScreenAwake") private var keepScreenAwake = true
     var body: some View {
@@ -374,6 +387,10 @@ struct InterpreterView: View {
                     }
                     if vm.realtimeMode && vm.canReviewInput {
                         Button("Послушать отправленную запись · бесплатно") { vm.playSubmitted() }.disabled(vm.busy && vm.phase != .playing)
+                        Button("Сохранить отправленную запись в WAV") {
+                            recordingDocument = vm.submittedRecording
+                            exportRecording = recordingDocument != nil
+                        }.disabled(vm.busy)
                         Text("Это точная запись, отправленная в этой фразе. Прослушивание на iPhone, без нового запроса.").font(.footnote).foregroundStyle(.secondary)
                     }
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
@@ -381,6 +398,14 @@ struct InterpreterView: View {
             }.padding(24)
         }.background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { SettingsView(vm: vm) }
+        .fileExporter(isPresented: $exportRecording, document: recordingDocument,
+                      contentType: .wav, defaultFilename: "Interpreter-\(vm.language)-recording") { result in
+            switch result {
+            case .success: vm.message = "WAV сохранён. Его можно открыть в контрольной программе на ПК."
+            case .failure: vm.message = "WAV не сохранён. Запись остаётся в памяти приложения."
+            }
+            recordingDocument = nil
+        }
         .onAppear { updateScreenAwake() }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
         .onChange(of: keepScreenAwake) { _, _ in updateScreenAwake() }
@@ -443,7 +468,7 @@ struct SettingsView: View {
                     Link("Создать ключ на сайте OpenAI", destination: URL(string: "https://platform.openai.com/api-keys")!)
                     Link("Баланс и расходы API", destination: URL(string: "https://platform.openai.com/settings/organization/billing/overview")!)
                     Text("Ориентир тарифа модели: $0,034 за минуту аудио. Одна запись — максимум 60 секунд. Счётчик длительности не является банковским балансом; фактические списания смотри на сайте OpenAI.").font(.footnote)
-                    Text("Ключ вводится только здесь и хранится в защищённом хранилище iPhone. Записи и переводы в приложении не сохраняются. Сервер и включённый компьютер не нужны.").font(.footnote)
+                    Text("Ключ хранится в защищённом хранилище iPhone. Записи и переводы остаются в памяти приложения. Отправленную запись можно вручную сохранить в WAV для проверки. Сервер и включённый компьютер не нужны.").font(.footnote)
                     if !keyMessage.isEmpty { Text(keyMessage).font(.footnote) }
                 }
                 if vm.realtimeMode {
@@ -521,4 +546,18 @@ struct LoginBrowser: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> SFSafariViewController { SFSafariViewController(url: url) }
     func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
+}
+struct WaveRecording: FileDocument {
+    static var readableContentTypes: [UTType] { [.wav] }
+    let data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws {
+        guard let bytes = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        data = bytes
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
 }
