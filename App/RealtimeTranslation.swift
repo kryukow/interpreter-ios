@@ -11,13 +11,15 @@ import Foundation
     private var generation = UUID()
     private var player: AVAudioPlayer?
     private var playbackFinished: (() -> Void)?
-    private var inputBytes = 0
+    private var playbackWatch: Task<Void, Never>?
 
     func run(key: String, target: String, onReady: @escaping () -> Void,
-             onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void) async throws -> Result {
+             onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void,
+             onSubmitted: @escaping (Int) -> Void, onLevel: @escaping (Double) -> Void) async throws -> Result {
+        try Task.checkCancellation()
         cancel()
         let token = generation
-        inputBytes = 0
+        var inputBytes = 0
         var request = URLRequest(url: RealtimeProtocol.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
@@ -67,8 +69,16 @@ import Foundation
                             for try await chunk in chunks {
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
+                                let level = chunk.withUnsafeBytes { raw -> Double in
+                                    let samples = raw.bindMemory(to: Int16.self)
+                                    guard !samples.isEmpty else { return 0 }
+                                    let power = samples.reduce(0.0) { $0 + pow(Double($1) / 32768, 2) }
+                                    return min(1, sqrt(power / Double(samples.count)) * 8)
+                                }
+                                onLevel(level)
                                 try await socket.send(.string(try RealtimeProtocol.append(chunk)))
-                                self.inputBytes += chunk.count
+                                inputBytes += chunk.count
+                                onSubmitted(chunk.count)
                             }
                             guard self.generation == token, !Task.isCancelled else { return }
                             self.microphone.stop(); onFinishing()
@@ -123,6 +133,14 @@ import Foundation
         let player = try AVAudioPlayer(data: audio)
         player.delegate = self; self.player = player; playbackFinished = onFinished
         guard player.play() else { self.player = nil; playbackFinished = nil; throw Failure.message("Не удалось воспроизвести голос OpenAI.") }
+        playbackWatch?.cancel()
+        playbackWatch = Task { [weak self, weak player] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                guard !Task.isCancelled, let self, let player, self.player === player else { return }
+                if !player.isPlaying { self.finishPlayback(player); return }
+            }
+        }
     }
     func cancel() {
         generation = UUID(); microphone.stop(); sending?.cancel(); sending = nil
@@ -130,15 +148,20 @@ import Foundation
         socket?.cancel(with: .goingAway, reason: nil); socket = nil
         session?.invalidateAndCancel(); session = nil
         player?.stop(); player = nil; playbackFinished = nil
+        playbackWatch?.cancel(); playbackWatch = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
-            guard self.player === player else { return }
-            self.player = nil; let callback = self.playbackFinished; self.playbackFinished = nil
-            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-            callback?()
+            self.finishPlayback(player)
         }
+    }
+    private func finishPlayback(_ player: AVAudioPlayer) {
+        guard self.player === player else { return }
+        playbackWatch?.cancel(); playbackWatch = nil
+        self.player = nil; let callback = playbackFinished; playbackFinished = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        callback?()
     }
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         audioPlayerDidFinishPlaying(player, successfully: false)

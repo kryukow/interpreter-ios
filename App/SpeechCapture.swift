@@ -12,7 +12,7 @@ import Speech
     private var transcript = SpeechTranscript()
 
     func start(locale: String, onText: @escaping (String) -> Void,
-               onEnd: @escaping (Error?) -> Void) async throws {
+               onEnd: @escaping (Error?) -> Void, onLevel: @escaping (Double) -> Void) async throws {
         cancel()
         transcript = SpeechTranscript()
         let token = generation
@@ -58,7 +58,16 @@ import Speech
         guard format.sampleRate > 0, format.channelCount > 0 else {
             cancel(); throw Failure.message("Микрофон недоступен.")
         }
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in request.append(buffer) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buffer, _ in
+            request.append(buffer)
+            guard let samples = buffer.floatChannelData?[0], buffer.frameLength > 0 else { return }
+            var power = 0.0
+            for index in 0..<Int(buffer.frameLength) { power += Double(samples[index]) * Double(samples[index]) }
+            let level = min(1, sqrt(power / Double(buffer.frameLength)) * 8)
+            Task { @MainActor [weak self] in
+                guard let self, self.generation == token else { return }; onLevel(level)
+            }
+        }
         tapped = true
         do { engine.prepare(); try engine.start() } catch { cancel(); throw error }
         deadline = Task { [weak self] in

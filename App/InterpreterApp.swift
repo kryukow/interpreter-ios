@@ -20,6 +20,16 @@ import UIKit
     @Published var model = UserDefaults.standard.string(forKey: "model") ?? ""
     @Published var realtimeMode = UserDefaults.standard.bool(forKey: "realtimeMode")
     @Published var realtimeStats = ""
+    @Published var heldLanguage: String?
+    @Published var soundLevels = Array(repeating: CGFloat(0), count: 40)
+    private func addLevel(_ level: Double) {
+        soundLevels.removeFirst(); soundLevels.append(CGFloat(min(1, max(0, level))))
+    }
+    @Published var budget: AudioBudget = {
+        guard let data = UserDefaults.standard.data(forKey: "audioBudget.v1"),
+              let budget = try? JSONDecoder().decode(AudioBudget.self, from: data) else { return AudioBudget() }
+        return budget
+    }()
     private let realtime = RealtimeTranslation()
     private var realtimeAudio: Data?
     private let capture = SpeechCapture()
@@ -45,9 +55,13 @@ import UIKit
             do {
                 try await capture.start(locale: language == "ru" ? "ru-RU" : "de-DE",
                     onText: { [weak self] text in self?.source = text },
-                    onEnd: { [weak self] error in self?.recognized(error) })
+                    onEnd: { [weak self] error in self?.recognized(error) },
+                    onLevel: { [weak self] level in
+                        guard let self, self.epoch == token else { return }; self.addLevel(level)
+                    })
                 guard epoch == token else { return }
-                phase = .listening; message = "Слушаю. Нажми кнопку ещё раз, чтобы перевести"
+                phase = .listening; message = "Говори. Отпусти кнопку, чтобы перевести"
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
             } catch {
                 guard epoch == token else { return }
                 capture.cancel(); phase = .idle; message = error.localizedDescription
@@ -56,7 +70,7 @@ import UIKit
     }
     private func recognized(_ error: Error?) {
         guard phase == .listening || phase == .finishing || phase == .starting else { return }
-        phase = .idle
+        heldLanguage = nil; phase = .idle
         if let error { message = "Распознавание: " + error.localizedDescription; return }
         translate()
     }
@@ -106,12 +120,48 @@ import UIKit
         } catch { message = error.localizedDescription }
     }
     func cancel() {
+        soundLevels = Array(repeating: 0, count: 40)
+        heldLanguage = nil
         epoch = UUID(); work?.cancel(); work = nil; capture.cancel()
         realtime.cancel()
         activeUtterance = nil
         speaker.stopSpeaking(at: .immediate)
         if phase == .translating { translation = "" }
         phase = .idle; message = "Остановлено"
+    }
+    func holdBegin(_ language: String) {
+        guard heldLanguage == nil else { return }
+        if busy { cancel() }
+        heldLanguage = language
+        tap(language)
+    }
+    func holdEnd(_ language: String) {
+        guard heldLanguage == language else { return }
+        heldLanguage = nil
+        if phase == .starting {
+            cancel(); message = "Удерживай кнопку до вибросигнала, затем говори"; return
+        }
+        guard phase == .listening else { return }
+        phase = .finishing; message = "Завершаю перевод…"
+        if realtimeMode { realtime.finish() }
+        else { capture.finish { [weak self] error in self?.recognized(error) } }
+    }
+    func holdCancel(_ language: String) {
+        guard heldLanguage == language else { return }
+        cancel(); message = "Запись отменена. Удерживай кнопку, чтобы начать снова"
+    }
+    private func recordAudio(_ bytes: Int) {
+        budget.record(bytes: bytes)
+        if let data = try? JSONEncoder().encode(budget) { UserDefaults.standard.set(data, forKey: "audioBudget.v1") }
+    }
+    func setBudget(_ text: String) -> Bool {
+        guard budget.setRemaining(text) else { return false }
+        if let data = try? JSONEncoder().encode(budget) { UserDefaults.standard.set(data, forKey: "audioBudget.v1") }
+        return true
+    }
+    var balanceLabel: String {
+        if let amount = budget.remaining { return String(format: "≈ $%.3f", amount) }
+        return "Не задан"
     }
     private func tapRealtime(_ language: String) {
         if phase == .listening {
@@ -125,29 +175,34 @@ import UIKit
         let token = epoch
         work = Task {
             do {
+                try Task.checkCancellation()
                 guard let key = try RealtimeKeyStore.load(), !key.isEmpty else {
                     throw Failure.message("Добавь API-ключ в настройках → Голосовой перевод API.")
                 }
                 let result = try await realtime.run(key: key, target: language == "ru" ? "de" : "ru",
                     onReady: { [weak self] in
                         guard let self, self.epoch == token else { return }
-                        self.phase = .listening; self.message = "Слушаю. Нажми этот язык ещё раз — прозвучит перевод"
+                        self.phase = .listening; self.message = "Говори. Отпусти кнопку — прозвучит перевод"
+                        UINotificationFeedbackGenerator().notificationOccurred(.success)
                     }, onFinishing: { [weak self] in
                         guard let self, self.epoch == token else { return }
                         self.phase = .finishing; self.message = "Получаю окончание голосового перевода…"
                     }, onText: { [weak self] text in
                         guard let self, self.epoch == token else { return }
                         self.translation = text
+                    }, onSubmitted: { [weak self] bytes in self?.recordAudio(bytes) },
+                    onLevel: { [weak self] level in
+                        guard let self, self.epoch == token else { return }; self.addLevel(level)
                     })
                 guard epoch == token else { return }
                 translation = result.text; realtimeAudio = result.audio
                 realtimeStats = String(format: "Отправлено %.1f с аудио", result.inputSeconds)
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
-                phase = .idle; speakRealtime()
+                heldLanguage = nil; phase = .idle; speakRealtime()
             } catch {
                 guard epoch == token else { return }
                 realtime.cancel(); realtimeAudio = nil; translation = ""
-                phase = .idle; message = error.localizedDescription
+                heldLanguage = nil; phase = .idle; message = error.localizedDescription
             }
         }
     }
@@ -201,16 +256,30 @@ struct InterpreterView: View {
                     Button { settings = true } label: { Image(systemName: "gearshape.fill").font(.title2) }
                         .disabled(vm.busy).accessibilityLabel("Настройки")
                 }
-                Image(systemName: vm.phase == .listening ? "waveform" : "waveform.circle").font(.system(size: 52)).foregroundStyle(.mint)
+                Image(systemName: vm.phase == .listening ? "waveform" : "infinity").font(.system(size: 52, weight: .light)).foregroundStyle(.white)
+                SoundWave(levels: vm.phase == .listening ? vm.soundLevels : Array(repeating: 0, count: 40),
+                          waiting: vm.phase == .starting || vm.phase == .finishing || vm.phase == .translating)
                 Text(vm.message).font(.headline).multilineTextAlignment(.center).frame(minHeight: 60)
-                Text(vm.realtimeMode ? "Голосовой перевод API · платный тест" : "Перевод через подписку ChatGPT")
+                Text(vm.realtimeMode ? "LIVE · ГОЛОСОВОЙ ПЕРЕВОД" : "ПОДПИСКА CHATGPT")
                     .font(.caption).foregroundStyle(.secondary)
+                if vm.realtimeMode {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("ОСТАТОК · ПРИМЕРНО").font(.caption2).foregroundStyle(.secondary)
+                            Text(vm.balanceLabel).font(.title3.monospacedDigit().weight(.semibold))
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 5) {
+                            Text("РАСХОД ПРИЛОЖЕНИЯ").font(.caption2).foregroundStyle(.secondary)
+                            Text(String(format: "$%.4f", vm.budget.spent)).font(.subheadline.monospacedDigit())
+                        }
+                    }.padding(18).background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 22))
+                }
                 HStack(spacing: 16) {
                     languageButton("Русский", language: "ru")
                     languageButton("Deutsch", language: "de")
                 }
-                Text("Нажми язык → скажи фразу → нажми ещё раз").font(.footnote).foregroundStyle(.secondary)
-                if vm.busy { Button("Остановить") { vm.cancel() }.buttonStyle(.bordered) }
+                Text("Держи → дождись вибросигнала → говори → отпусти").font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 VStack(alignment: .leading, spacing: 12) {
                     if vm.realtimeMode {
                         Text("ГОЛОС → ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
@@ -236,7 +305,7 @@ struct InterpreterView: View {
                     Button("Прослушать снова") { vm.speak() }.disabled(vm.busy || !vm.canReplay)
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
             }.padding(24)
-        }.background(Color(red: 0.035, green: 0.06, blue: 0.09))
+        }.background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { SettingsView(vm: vm) }
         .onAppear { updateScreenAwake() }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false }
@@ -252,13 +321,11 @@ struct InterpreterView: View {
         UIApplication.shared.isIdleTimerDisabled = keepScreenAwake && scenePhase == .active
     }
     func languageButton(_ title: String, language: String) -> some View {
-        Button { vm.tap(language) } label: {
-            VStack(spacing: 12) {
-                Image(systemName: vm.phase == .listening && vm.language == language ? "stop.fill" : "mic.fill").font(.system(size: 36))
-                Text(title).font(.headline)
-            }.frame(maxWidth: .infinity).padding(.vertical, 28)
-                .background(language == "ru" ? Color.mint : Color.cyan, in: RoundedRectangle(cornerRadius: 26)).foregroundStyle(.black)
-        }.disabled(vm.busy && !(vm.phase == .listening && vm.language == language))
+        HoldToTalkButton(title: title, subtitle: language == "ru" ? "→ DEUTSCH" : "→ РУССКИЙ",
+            active: vm.heldLanguage == language,
+            onBegin: { vm.holdBegin(language) }, onEnd: { vm.holdEnd(language) },
+            onCancel: { vm.holdCancel(language) })
+            .frame(maxWidth: .infinity).frame(height: 170)
     }
 }
 
@@ -272,6 +339,8 @@ struct SettingsView: View {
     @State private var keySaved = false
     @State private var keyMessage = ""
     @State private var removeKey = false
+    @State private var balanceInput = ""
+    @State private var balanceMessage = ""
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         NavigationStack {
@@ -298,12 +367,25 @@ struct SettingsView: View {
                     Text("Ключ вводится только здесь и хранится в защищённом хранилище iPhone. Записи и переводы в приложении не сохраняются. Сервер и включённый компьютер не нужны.").font(.footnote)
                     if !keyMessage.isEmpty { Text(keyMessage).font(.footnote) }
                 }
+                if vm.realtimeMode {
+                    Section("Счётчик расходов") {
+                        LabeledContent("Примерный остаток", value: vm.balanceLabel)
+                        LabeledContent("Расход приложения", value: String(format: "$%.4f", vm.budget.spent))
+                        TextField("Текущий остаток на сайте, USD", text: $balanceInput).keyboardType(.decimalPad)
+                        Button("Установить текущий остаток") {
+                            if vm.setBudget(balanceInput) { balanceInput = ""; balanceMessage = "Остаток обновлён" }
+                            else { balanceMessage = "Введи сумму в долларах, например 9,90" }
+                        }.disabled(balanceInput.isEmpty)
+                        Text("Один раз укажи фактический остаток с сайта. После пополнения обнови его здесь. Приложение вычитает оценку по отправленному аудио, включая отменённые фразы. Озвучивание сохранённого перевода повторно бесплатно. Это локальная оценка, а не баланс, полученный от OpenAI.").font(.footnote)
+                        if !balanceMessage.isEmpty { Text(balanceMessage).font(.footnote) }
+                    }
+                }
                 Section("Экран") {
                     Toggle("Не гасить экран", isOn: $keepScreenAwake)
                     Text("Экран остаётся включённым, пока Interpreter открыт. При сворачивании обычная автоблокировка возвращается.").font(.footnote)
                 }
                 if !vm.realtimeMode { VoiceSettingsView(preferences: vm.voices) }
-                Section("ChatGPT") {
+                if !vm.realtimeMode { Section("ChatGPT") {
                     Text(vm.account.isEmpty ? "Вход не выполнен" : vm.account)
                     Button("Войти через ChatGPT") {
                         busy = true
@@ -322,12 +404,12 @@ struct SettingsView: View {
                         ForEach(vm.models) { Text($0.name).tag($0.id) }
                     }.disabled(busy)
                     Text(message.isEmpty ? login.message : message).font(.footnote)
-                }
+                } }
                 Section {
                     Text("В режиме подписки восстановление смысла и перевод выполняются двумя запросами через лимиты ChatGPT. Аудио в OpenAI не отправляется: туда уходит только текст. В голосовом режиме API в OpenAI передаётся аудио.")
                     Text("Распознавание выполняется на устройстве, если язык поддерживается. Иначе iPhone может использовать сервер Apple. Качество проверим на реальных фразах.")
                 }.font(.footnote)
-            }.navigationTitle("Настройки")
+            }.navigationTitle("Настройки").tint(.white)
                 .toolbar { Button("Готово") { dismiss() }.disabled(busy) }
                 .interactiveDismissDisabled(busy)
                 .sheet(isPresented: Binding(get: { login.browserURL != nil }, set: { _ in })) {
@@ -344,7 +426,7 @@ struct SettingsView: View {
                 }
                 .task {
                     keySaved = ((try? RealtimeKeyStore.load()) ?? nil) != nil
-                    guard !vm.account.isEmpty, !busy else { return }
+                    guard !vm.realtimeMode, !vm.account.isEmpty, !busy else { return }
                     busy = true
                     defer { busy = false }
                     do { try await vm.loadModels() } catch { message = error.localizedDescription }
