@@ -15,6 +15,7 @@ import Speech
         let token = generation
         let allowed = await AVCaptureDevice.requestAccess(for: .audio)
         try Task.checkCancellation()
+        guard generation == token else { throw CancellationError() }
         guard allowed else { throw Failure.message("Разреши микрофон в настройках iPhone.") }
         let session = AVAudioSession.sharedInstance()
         try session.setCategory(.playAndRecord, mode: .measurement, options: [.defaultToSpeaker, .allowBluetooth])

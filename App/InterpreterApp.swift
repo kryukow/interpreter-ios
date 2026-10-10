@@ -268,7 +268,7 @@ import UIKit
                 guard let self, self.epoch == token else { return }; self.phase = .idle; self.message = error
             }) { [weak self] in
                 guard let self, self.epoch == token else { return }
-                self.phase = .idle; self.message = "Запись проверена. Перевод пока не получен."
+                self.phase = .idle; self.message = self.reviewResponse ? "Запись проверена. Перевод не получен." : "Запись проверена. Можно прослушать перевод или начать новую фразу."
             }
         } catch { phase = .idle; message = error.localizedDescription }
     }

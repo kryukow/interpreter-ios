@@ -53,6 +53,8 @@ import Foundation
                 try Task.checkCancellation()
                 guard generation == token else { throw CancellationError() }
                 let message = try await socket.receive()
+                try Task.checkCancellation()
+                guard generation == token else { throw CancellationError() }
                 let data: Data
                 switch message {
                 case .string(let string): data = Data(string.utf8)
@@ -62,6 +64,8 @@ import Foundation
                 switch try RealtimeProtocol.event(data) {
                 case .created:
                     try await socket.send(.string(try RealtimeProtocol.configuration(target: target)))
+                    try Task.checkCancellation()
+                    guard generation == token else { throw CancellationError() }
                 case .updated(let language):
                     guard !configured else { continue }
                     guard language == target else { throw Failure.message("OpenAI не подтвердил нужный язык перевода.") }
@@ -90,6 +94,8 @@ import Foundation
                                     try Task.checkCancellation()
                                     guard self.generation == token else { throw CancellationError() }
                                     try await socket.send(.string(try RealtimeProtocol.append(frame)))
+                                    try Task.checkCancellation()
+                                    guard self.generation == token else { throw CancellationError() }
                                     inputBytes += frame.count; submittedPCM.append(frame); onSubmitted(frame.count)
                                 }
                             }
@@ -99,10 +105,14 @@ import Foundation
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
                                 try await socket.send(.string(try RealtimeProtocol.append(tail)))
+                                try Task.checkCancellation()
+                                guard self.generation == token else { throw CancellationError() }
                                 inputBytes += tail.count; submittedPCM.append(tail); onSubmitted(tail.count)
                             }
                             closeRequested = true
                             try await socket.send(.string("{\"type\":\"session.close\"}"))
+                            try Task.checkCancellation()
+                            guard self.generation == token else { throw CancellationError() }
                             self.armTimeout(socket, token: token, seconds: 25)
                         } catch {
                             guard self.generation == token, !Task.isCancelled else { return }
