@@ -35,6 +35,12 @@ jobs:
           "$RUNNER_TEMP/budget-tests"
       - name: Verify XcodeGen
         run: xcodegen --version
+      - name: Test playback silence at both edges
+        run: |
+          swiftc App/PlaybackClip.swift scripts/test_playback_clip.swift -o "$RUNNER_TEMP/playback-tests"
+          "$RUNNER_TEMP/playback-tests"
+      - name: Verify build tools
+        run: xcodebuild -version
       - name: Generate project
         run: xcodegen generate
       - name: Build simulator
@@ -51,11 +57,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$RUNNER_TEMP/Device/Build/Products/Release-iphoneos/Interpreter.app" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-0.4.2-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-0.4.2-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-0.4.3-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-0.4.3-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-0.4.2-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-0.4.2-Unsigned.ipa
+          name: Interpreter-0.4.3-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-0.4.3-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7

@@ -2,7 +2,7 @@ import AVFoundation
 import Foundation
 
 @MainActor final class RealtimeTranslation: NSObject, AVAudioPlayerDelegate {
-    struct Result { let text: String; let audio: Data; let playbackStart: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
+    struct Result { let text: String; let audio: Data; let removedLeading: Double; let removedTrailing: Double; let inputSeconds: Double; let firstOutputSeconds: Double? }
     private let microphone = RealtimeMicrophone()
     private var socket: URLSessionWebSocketTask?
     private var session: URLSession?
@@ -110,8 +110,9 @@ import Foundation
                 }
             }
             guard !audio.isEmpty else { throw Failure.message("Голосовой перевод не получен. Попробуй короткую чёткую фразу.") }
-            return Result(text: text, audio: try RealtimeProtocol.wav(audio),
-                          playbackStart: RealtimeProtocol.playbackStart(audio),
+            let clip = PlaybackClip.trim(audio)
+            return Result(text: text, audio: try RealtimeProtocol.wav(clip.pcm),
+                          removedLeading: clip.leading, removedTrailing: clip.trailing,
                           inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond), firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
         catch is CancellationError { throw CancellationError() }
@@ -129,7 +130,7 @@ import Foundation
         }
     }
     func finish() { microphone.stop() }
-    func play(_ audio: Data, start: Double, onFinished: @escaping () -> Void) throws {
+    func play(_ audio: Data, onFinished: @escaping () -> Void) throws {
         microphone.stop()
         let session = AVAudioSession.sharedInstance()
         if !playbackSessionActive {
@@ -143,7 +144,8 @@ import Foundation
             guard player.prepareToPlay() else { throw Failure.message("Не удалось подготовить голосовой перевод.") }
             preparedAudio = audio
         }
-        player.currentTime = max(0, min(start, player.duration))
+        playbackWatch?.cancel()
+        player.stop(); player.currentTime = 0
         player.delegate = self; self.player = player; playbackFinished = onFinished
         guard player.play() else { self.player = nil; playbackFinished = nil; throw Failure.message("Не удалось воспроизвести голос OpenAI.") }
         playbackWatch?.cancel()
@@ -174,8 +176,8 @@ import Foundation
         guard self.player === player else { return }
         playbackWatch?.cancel(); playbackWatch = nil
         let callback = playbackFinished; playbackFinished = nil
-        player.currentTime = 0; player.prepareToPlay()
         callback?()
+        player.currentTime = 0; player.prepareToPlay()
     }
     nonisolated func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
         audioPlayerDidFinishPlaying(player, successfully: false)

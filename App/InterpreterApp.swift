@@ -32,7 +32,6 @@ import UIKit
     }()
     private let realtime = RealtimeTranslation()
     private var realtimeAudio: Data?
-    private var realtimePlaybackStart = 0.0
     private let capture = SpeechCapture()
     let voices = VoicePreferences()
     private let speaker = AVSpeechSynthesizer()
@@ -106,7 +105,7 @@ import UIKit
         }
     }
     func speak() {
-        guard phase == .idle else { return }
+        guard phase == .idle || (realtimeMode && phase == .playing) else { return }
         if realtimeMode { speakRealtime(); return }
         guard !translation.isEmpty else { return }
         voices.refresh()
@@ -201,9 +200,9 @@ import UIKit
                     })
                 guard epoch == token else { return }
                 translation = result.text; realtimeAudio = result.audio
-                realtimePlaybackStart = result.playbackStart
                 realtimeStats = String(format: "Отправлено %.1f с аудио", result.inputSeconds)
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
+                realtimeStats += String(format: "\nПропущено тихих краёв: до %.1f с · после %.1f с", result.removedLeading, result.removedTrailing)
                 heldLanguage = nil; phase = .idle; speakRealtime()
             } catch {
                 guard epoch == token else { return }
@@ -217,7 +216,7 @@ import UIKit
         do {
             phase = .playing; message = "Звучит голосовой перевод OpenAI"
             let token = epoch
-            try realtime.play(audio, start: realtimePlaybackStart) { [weak self] in
+            try realtime.play(audio) { [weak self] in
                 guard let self, self.epoch == token else { return }
                 self.phase = .idle; self.message = "Готово. Выбери язык следующей фразы"
             }
@@ -308,7 +307,7 @@ struct InterpreterView: View {
                     }
                     Text("ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
                     Text(vm.translation.isEmpty ? "—" : vm.translation).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    Button("Прослушать снова") { vm.speak() }.disabled(vm.busy || !vm.canReplay)
+                    Button("Прослушать снова") { vm.speak() }.disabled((vm.busy && !(vm.realtimeMode && vm.phase == .playing)) || !vm.canReplay)
                 }.padding(20).background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 24))
             }.padding(24)
         }.background(Color.black).tint(.white)
