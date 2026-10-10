@@ -8,6 +8,7 @@ import Foundation
         let audio = session["audio"] as! [String: Any]
         precondition((audio["output"] as! [String: Any])["language"] as? String == "de")
         precondition((audio["input"] as! [String: Any])["transcription"] == nil, "no second billed transcription model")
+        precondition((audio["input"] as! [String: Any])["noise_reduction"] is NSNull, "match working PC control with noise reduction off")
         let russian = try JSONSerialization.jsonObject(with: Data(try RealtimeProtocol.configuration(target: "ru").utf8)) as! [String: Any]
         let ruAudio = (russian["session"] as! [String: Any])["audio"] as! [String: Any]
         precondition((ruAudio["output"] as! [String: Any])["language"] as? String == "ru", "German input requests Russian output")

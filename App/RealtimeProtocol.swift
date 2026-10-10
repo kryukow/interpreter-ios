@@ -9,7 +9,7 @@ enum RealtimeProtocol {
     static func configuration(target: String) throws -> String {
         guard ["ru", "de"].contains(target) else { throw ProtocolError.invalidLanguage }
         return try json(["type": "session.update", "session": ["audio": [
-            "input": ["noise_reduction": ["type": "near_field"]],
+            "input": ["noise_reduction": NSNull()],
             "output": ["language": target]
         ]]])
     }

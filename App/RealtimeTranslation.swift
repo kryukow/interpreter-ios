@@ -15,7 +15,7 @@ import Foundation
     private var playbackFinished: (() -> Void)?
     private var playbackWatch: Task<Void, Never>?
 
-    func run(key: String, source: String, target: String, boostQuietSpeech: Bool, onReady: @escaping () -> Void,
+    func run(key: String, source: String, target: String, onReady: @escaping () -> Void,
              onFinishing: @escaping () -> Void, onText: @escaping (String) -> Void,
              onSubmitted: @escaping (Int) -> Void, onLevel: @escaping (Double) -> Void,
              onInputText: @escaping (String) -> Void) async throws -> Result {
@@ -27,7 +27,40 @@ import Foundation
         var submittedPCM = Data()
         var capturedBytes = 0, transcriptParts = 0, audioParts = 0
         var closeRequested = false
-        var voiceGain = PCMVoiceGain()
+        // Match the independent Windows control: complete the recording before
+        // opening a paid session. Send immutable PCM, with no gain processing.
+        var recording = Data()
+        do {
+            let chunks = try await microphone.start(locale: source == "ru" ? "ru-RU" : "de-DE", onInputText: onInputText)
+            try Task.checkCancellation()
+            guard generation == token else { throw CancellationError() }
+            onReady()
+            for try await chunk in chunks {
+                try Task.checkCancellation()
+                guard generation == token else { throw CancellationError() }
+                guard recording.count + chunk.count <= RealtimeProtocol.maximumSeconds * RealtimeProtocol.bytesPerSecond else {
+                    throw Failure.message("Запись превышает допустимую длительность.")
+                }
+                recording.append(chunk)
+                let level = chunk.withUnsafeBytes { raw -> Double in
+                    let samples = raw.bindMemory(to: Int16.self)
+                    guard !samples.isEmpty else { return 0 }
+                    let power = samples.reduce(0.0) { $0 + pow(Double($1) / 32768, 2) }
+                    return min(1, sqrt(power / Double(samples.count)) * 8)
+                }
+                inputLevel = max(inputLevel, level); onLevel(level)
+            }
+            try Task.checkCancellation()
+            guard generation == token else { throw CancellationError() }
+            microphone.stop()
+            guard !recording.isEmpty else { throw Failure.message("В записи нет звука. Удерживай кнопку и говори после вибросигнала.") }
+            capturedBytes = recording.count
+            onFinishing()
+        } catch {
+            if generation == token { microphone.stop() }
+            throw error
+        }
+        let packets = PCMFrames.recording(recording)
         var request = URLRequest(url: RealtimeProtocol.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let configuration = URLSessionConfiguration.ephemeral
@@ -71,47 +104,21 @@ import Foundation
                     guard !configured else { continue }
                     guard language == target else { throw Failure.message("OpenAI не подтвердил нужный язык перевода.") }
                     timeout?.cancel()
-                    let chunks = try await microphone.start(locale: source == "ru" ? "ru-RU" : "de-DE", onInputText: onInputText)
-                    try Task.checkCancellation()
-                    guard generation == token else { throw CancellationError() }
-                    configured = true; started = Date(); onReady()
+                    configured = true; started = Date()
                     sending = Task { [weak self] in
                         guard let self else { return }
-                        var frames = PCMFrames()
                         do {
-                            for try await chunk in chunks {
+                            for frame in packets {
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
-                                capturedBytes += chunk.count
-                                let level = chunk.withUnsafeBytes { raw -> Double in
-                                    let samples = raw.bindMemory(to: Int16.self)
-                                    guard !samples.isEmpty else { return 0 }
-                                    let power = samples.reduce(0.0) { $0 + pow(Double($1) / 32768, 2) }
-                                    return min(1, sqrt(power / Double(samples.count)) * 8)
-                                }
-                                onLevel(level)
-                                inputLevel = max(inputLevel, level)
-                                for rawFrame in frames.append(chunk) {
-                                    let frame = voiceGain.process(rawFrame, enabled: boostQuietSpeech)
-                                    try Task.checkCancellation()
-                                    guard self.generation == token else { throw CancellationError() }
-                                    try await socket.send(.string(try RealtimeProtocol.append(frame)))
-                                    try Task.checkCancellation()
-                                    guard self.generation == token else { throw CancellationError() }
-                                    inputBytes += frame.count; submittedPCM.append(frame); onSubmitted(frame.count)
-                                }
+                                try await socket.send(.string(try RealtimeProtocol.append(frame)))
+                                try Task.checkCancellation()
+                                guard self.generation == token else { throw CancellationError() }
+                                inputBytes += frame.count; submittedPCM.append(frame); onSubmitted(frame.count)
+                                // Same 200 ms pacing as the confirmed working PC control.
+                                try await Task.sleep(nanoseconds: 200_000_000)
                             }
                             guard self.generation == token, !Task.isCancelled else { return }
-                            self.microphone.stop(); onFinishing()
-                            if let rawTail = frames.finish() {
-                                let tail = voiceGain.process(rawTail, enabled: boostQuietSpeech)
-                                try Task.checkCancellation()
-                                guard self.generation == token else { throw CancellationError() }
-                                try await socket.send(.string(try RealtimeProtocol.append(tail)))
-                                try Task.checkCancellation()
-                                guard self.generation == token else { throw CancellationError() }
-                                inputBytes += tail.count; submittedPCM.append(tail); onSubmitted(tail.count)
-                            }
                             closeRequested = true
                             try await socket.send(.string("{\"type\":\"session.close\"}"))
                             try Task.checkCancellation()
@@ -119,7 +126,7 @@ import Foundation
                             self.armTimeout(socket, token: token, seconds: 25)
                         } catch {
                             guard self.generation == token, !Task.isCancelled else { return }
-                            self.microphone.stop(); socket.cancel(with: .goingAway, reason: nil)
+                            socket.cancel(with: .goingAway, reason: nil)
                         }
                     }
                     // A stalled send/receive must not leave an open paid session indefinitely.
@@ -159,7 +166,7 @@ import Foundation
                           inputSeconds: Double(inputBytes) / Double(RealtimeProtocol.bytesPerSecond),
                           capturedSeconds: Double(capturedBytes) / Double(RealtimeProtocol.bytesPerSecond),
                           transcriptParts: transcriptParts, audioParts: audioParts,
-                          boostEnabled: boostQuietSpeech, maximumInputGain: voiceGain.maximumGain, firstOutputSeconds: firstOutput)
+                          boostEnabled: false, maximumInputGain: 1, firstOutputSeconds: firstOutput)
         } catch let error as Failure { throw error }
         catch is CancellationError { throw CancellationError() }
         catch {

@@ -19,9 +19,6 @@ import UIKit
     @Published var account = ""
     @Published var model = UserDefaults.standard.string(forKey: "model") ?? ""
     @Published var realtimeMode = UserDefaults.standard.bool(forKey: "realtimeMode")
-    @Published var boostQuietSpeech = UserDefaults.standard.object(forKey: "boostQuietSpeech") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(boostQuietSpeech, forKey: "boostQuietSpeech") }
-    }
     @Published var realtimeStats = ""
     @Published var reviewResponse = false
     @Published var reviewingOriginal = false
@@ -185,7 +182,7 @@ import UIKit
         self.language = language; source = ""; translation = ""; restored = ""
         realtimeAudio = nil; originalRealtimeAudio = nil; reviewResponse = false; reviewingOriginal = false; realtimeStats = ""
         submittedRealtimeAudio = nil; canReviewInput = false
-        phase = .starting; message = "Подключаю голосовой перевод…"
+        phase = .starting; message = "Включаю микрофон…"
         let token = epoch
         work = Task {
             do {
@@ -193,14 +190,14 @@ import UIKit
                 guard let key = try RealtimeKeyStore.load(), !key.isEmpty else {
                     throw Failure.message("Добавь API-ключ в настройках → Голосовой перевод API.")
                 }
-                let result = try await realtime.run(key: key, source: language, target: language == "ru" ? "de" : "ru", boostQuietSpeech: boostQuietSpeech,
+                let result = try await realtime.run(key: key, source: language, target: language == "ru" ? "de" : "ru",
                     onReady: { [weak self] in
                         guard let self, self.epoch == token else { return }
                         self.phase = .listening; self.message = "Говори. Отпусти кнопку — прозвучит перевод"
                         UINotificationFeedbackGenerator().notificationOccurred(.success)
                     }, onFinishing: { [weak self] in
                         guard let self, self.epoch == token else { return }
-                        self.phase = .finishing; self.message = "Получаю окончание голосового перевода…"
+                        self.phase = .finishing; self.message = "Отправляю запись и получаю перевод…"
                     }, onText: { [weak self] text in
                         guard let self, self.epoch == token else { return }
                         self.translation = text
@@ -222,7 +219,7 @@ import UIKit
                 if let delay = result.firstOutputSeconds { realtimeStats += String(format: " · Первый ответ %.1f с", delay) }
                 realtimeStats += String(format: "\nПропущено тихих краёв: до %.1f с · после %.1f с", result.removedLeading, result.removedTrailing)
                 realtimeStats += "\nОтвет завершён сервером · Частей текста: \(result.transcriptParts) · звука: \(result.audioParts)"
-                realtimeStats += String(format: "\nУсиление тихой речи: %@ · максимум ×%.1f", result.boostEnabled ? "вкл." : "выкл.", result.maximumInputGain)
+                realtimeStats += "\nКак в контрольной программе ПК · без усиления и шумоподавления"
                 if reviewResponse {
                     realtimeStats += result.inputLevel < 0.001 ? "\nОтправленный звук микрофона почти беззвучный." : "\nВ отправленном аудио есть звук. Текст перевода от OpenAI не получен."
                 }
@@ -320,7 +317,7 @@ struct InterpreterView: View {
                 SoundWave(levels: vm.phase == .listening ? vm.soundLevels : Array(repeating: 0, count: 40),
                           waiting: vm.phase == .starting || vm.phase == .finishing || vm.phase == .translating)
                 Text(vm.message).font(.headline).multilineTextAlignment(.center).frame(minHeight: 60)
-                Text(vm.realtimeMode ? "LIVE · ГОЛОСОВОЙ ПЕРЕВОД" : "ПОДПИСКА CHATGPT")
+                Text(vm.realtimeMode ? "API · ГОЛОСОВОЙ ПЕРЕВОД" : "ПОДПИСКА CHATGPT")
                     .font(.caption).foregroundStyle(.secondary)
                 if vm.realtimeMode {
                     HStack {
@@ -343,7 +340,7 @@ struct InterpreterView: View {
                 VStack(alignment: .leading, spacing: 12) {
                     if vm.realtimeMode {
                         Text("ГОЛОС → ПЕРЕВОД").font(.caption).foregroundStyle(.secondary)
-                        Text("Модель переводит непосредственно аудио. Текст появится по мере перевода, голос прозвучит после завершения записи.").font(.footnote).foregroundStyle(.secondary)
+                        Text("Удерживай кнопку и говори. После отпускания полная запись отправится на перевод. Текст появится во время отправки, затем прозвучит голос.").font(.footnote).foregroundStyle(.secondary)
                         if !vm.realtimeStats.isEmpty { Text(vm.realtimeStats).font(.footnote).foregroundStyle(.secondary) }
                         if !vm.source.isEmpty {
                             Text("ПРОВЕРКА МИКРОФОНА · \(vm.language == "ru" ? "РУССКИЙ" : "DEUTSCH")").font(.caption).foregroundStyle(.secondary)
@@ -451,8 +448,7 @@ struct SettingsView: View {
                 }
                 if vm.realtimeMode {
                     Section("Микрофон") {
-                        Toggle("Усилить тихую речь", isOn: $vm.boostQuietSpeech).disabled(vm.busy)
-                        Text("Поднимает громкость тихого голоса перед отправкой, с защитой от перегрузки. Не увеличивает длительность записи и не создаёт дополнительных запросов. В проверке записи слышно именно то, что отправлено.").font(.footnote)
+                        Text("Сначала полная запись, затем отправка — как в проверенной программе ПК. Усиление и шумоподавление отключены. Запись остаётся в памяти до следующей фразы; её можно прослушать бесплатно.").font(.footnote)
                     }
                     Section("Счётчик расходов") {
                         LabeledContent("Примерный остаток", value: vm.balanceLabel)

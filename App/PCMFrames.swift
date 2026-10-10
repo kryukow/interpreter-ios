@@ -2,6 +2,12 @@ import Foundation
 
 struct PCMFrames {
     static let frameBytes = 9600 // 200 ms, 24 kHz mono PCM16
+    static func recording(_ pcm: Data) -> [Data] {
+        var frames = PCMFrames()
+        var result = frames.append(pcm)
+        if let tail = frames.finish() { result.append(tail) }
+        return result
+    }
     private var pending = Data()
     mutating func append(_ data: Data) -> [Data] {
         pending.append(data)

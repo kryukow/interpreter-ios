@@ -67,11 +67,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/ipa/Payload"
           cp -R "$RUNNER_TEMP/Device/Build/Products/Release-iphoneos/Interpreter.app" "$RUNNER_TEMP/ipa/Payload/"
           cd "$RUNNER_TEMP/ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-0.4.7-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-0.4.7-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-0.4.8-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-0.4.8-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-0.4.7-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-0.4.7-Unsigned.ipa
+          name: Interpreter-0.4.8-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-0.4.8-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
