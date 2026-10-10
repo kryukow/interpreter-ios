@@ -239,6 +239,8 @@ import UIKit
             try realtime.play(audio, onStarted: { [weak self] delay in
                 guard let self, self.epoch == token else { return }
                 self.playbackTiming = String(format: "Запуск плеера: %.2f с", delay)
+            }, onFailed: { [weak self] error in
+                guard let self, self.epoch == token else { return }; self.phase = .idle; self.message = error
             }) { [weak self] in
                 guard let self, self.epoch == token else { return }
                 self.phase = .idle; self.message = self.reviewResponse ? "Перевод не получен. Можно начать новую фразу." : "Готово. Выбери язык следующей фразы"
@@ -258,6 +260,8 @@ import UIKit
             try realtime.play(audio, onStarted: { [weak self] delay in
                 guard let self, self.epoch == token else { return }
                 self.playbackTiming = String(format: "Запуск плеера: %.2f с", delay)
+            }, onFailed: { [weak self] error in
+                guard let self, self.epoch == token else { return }; self.phase = .idle; self.message = error
             }) { [weak self] in
                 guard let self, self.epoch == token else { return }
                 self.phase = .idle; self.message = "Запись проверена. Перевод пока не получен."

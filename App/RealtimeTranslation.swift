@@ -149,7 +149,8 @@ import Foundation
         }
     }
     func finish() { microphone.stop() }
-    func play(_ audio: Data, onStarted: @escaping (Double) -> Void, onFinished: @escaping () -> Void) throws {
+    func play(_ audio: Data, onStarted: @escaping (Double) -> Void,
+              onFailed: @escaping (String) -> Void, onFinished: @escaping () -> Void) throws {
         let requested = ProcessInfo.processInfo.systemUptime
         microphone.stop()
         let session = AVAudioSession.sharedInstance()
@@ -179,7 +180,17 @@ import Foundation
                     reported = true
                     onStarted(max(0, ProcessInfo.processInfo.systemUptime - requested - player.currentTime))
                 }
-                if !player.isPlaying { self.finishPlayback(player); return }
+                // isPlaying can be false while an audio route starts. Never
+                // interpret that transient as completion or rewind the clip.
+                if reported, !player.isPlaying, player.currentTime >= player.duration - 0.03 {
+                    self.finishPlayback(player); return
+                }
+                let elapsed = ProcessInfo.processInfo.systemUptime - requested
+                if (!reported && elapsed > 12) || elapsed > player.duration + 20 {
+                    self.cancel()
+                    onFailed("Плеер не начал или не завершил воспроизведение. Проверь вывод звука iPhone.")
+                    return
+                }
             }
         }
     }
