@@ -1,4 +1,4 @@
-# Interpreter Live 1.2.0 (4) — instant translation with four language pairs and a live waveform
+# Interpreter Live 1.2.1 (5) — voice sharing, audio import and streamlined settings
 
 The tappable header «Русский ↔ Deutsch ⇵» opens a compact native iPhone wheel picker.
 Only emoji flags appear in the wheel; swiping up or down changes the language
@@ -57,3 +57,28 @@ names and short phrases. Verify that the
 waveform reacts to quiet/loud speech, remains still when not recording,
 and has no impact on the latency achieved by the previous release.
 The offline protocol tests and CI compile do not prove live API quality.
+
+## Audio attachments and translated voice
+
+The microphone translation's OpenAI-returned WAV is preserved in memory as before
+and is now also available via **Сохранить перевод** (Files document exporter) and
+**Отправить перевод** (iOS share sheet for WhatsApp, Messages, etc.).
+These save/share *the translated voice*, not the input microphone recording.
+Original recording can still be reviewed but its export button is removed.
+The temporary share WAV is deleted on the next recording or imported translation.
+
+**Импорт аудио** opens the iOS Files picker, accepting audio types including
+WAV/M4A/MP3/AAC whenever the system decoder supports them. The selected file is
+decoded locally to 24 kHz mono PCM16 and streamed in chronological 200 ms frames
+with the existing realtime socket; uploads are chargeable. Maximum: 60 seconds.
+Imported audio is assumed to be in the selected partner language and is translated
+to Russian. To use a WhatsApp voice message, first save it to Files, then import.
+An inbound WhatsApp Share Extension is not part of this build.
+
+API key is green only after a successful translation; merely saving a key is not
+proof the key was accepted. The manually entered API balance and estimate after
+deducting this app's usage appear in Settings. The displayed price is an estimate,
+not account billing data. Preferences and PCM format text are shortened.
+
+Voice similarity may vary with the OpenAI model and is **not voice cloning**.
+The exported file uses the returned audio without further synthesis or re-translation.
