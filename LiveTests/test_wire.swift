@@ -11,6 +11,13 @@ import Foundation
         let pcm = Data((0..<19_202).map { UInt8(truncatingIfNeeded: $0 * 37) })
         let wav = try WavePCM.encode(pcm)
         expect(try WavePCM.decode(wav) == pcm, "WAV round trip changed samples")
+        let sampleURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Live-Import-Test-\(UUID().uuidString).wav")
+        try wav.write(to: sampleURL)
+        defer { try? FileManager.default.removeItem(at: sampleURL) }
+        let imported = try ImportedAudio.read(url: sampleURL)
+        expect(imported.count > 4_800, "Local WAV import failed")
+        expect(imported.count <= WavePCM.maximumInputBytes, "Imported length exceeded maximum")
         let frames = try WavePCM.frames(pcm)
         expect(frames.map(\.count) == [9_600, 9_600, 9_600], "Final frame must match PC padding")
         expect(frames.reduce(into: Data()) { $0.append($1) } == pcm + Data(repeating: 0, count: 9598), "Frame ordering or samples changed")
