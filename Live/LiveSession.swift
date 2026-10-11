@@ -15,6 +15,8 @@ import CryptoKit
     @Published private(set) var recordedWave: Data?
     @Published private(set) var translatedWave: Data?
     @Published private(set) var keySaved = false
+    @Published private(set) var keyVerified = false
+    @Published private(set) var shareURL: URL?
     @Published private(set) var spent = UserDefaults.standard.double(forKey: "live.spent")
     @Published private(set) var credit: Double? = UserDefaults.standard.object(forKey: "live.credit") as? Double
     private let recorder = NativeRecorder()
@@ -25,29 +27,42 @@ import CryptoKit
     private var livePlayer: LiveStreamPlayer?
     private var playWatch: Task<Void, Never>?
     private var direction = "ru"
+    private var shareFile: URL?
     var busy: Bool { phase != .idle && phase != .playing }
     var remainder: String { credit.map { String(format: "≈ $%.3f", max(0, $0 - spent)) } ?? "—" }
+    var enteredBalanceText: String {
+        guard let total = credit else { return "—" }
+        let stored = UserDefaults.standard.object(forKey: "live.manualEnteredBalance") as? Double
+        let amount = stored ?? max(0, total - spent)
+        return String(format: "$%.3f", amount)
+    }
     override init() {
         super.init()
         refreshKey()
     }
     func refreshKey() { keySaved = (try? LiveKey.read()) != nil }
-    func saveKey(_ value: String) throws { try LiveKey.save(value); refreshKey() }
-    func removeKey() throws { try LiveKey.remove(); refreshKey() }
+    func saveKey(_ value: String) throws { try LiveKey.save(value); keyVerified = false; refreshKey() }
+    func removeKey() throws { try LiveKey.remove(); keyVerified = false; refreshKey() }
     func setBalance(_ value: String) -> Bool {
         guard let amount = Double(value.replacingOccurrences(of: ",", with: ".")), amount.isFinite,
               amount >= 0, amount <= 1_000_000 else { return false }
         credit = amount + spent
         UserDefaults.standard.set(amount + spent, forKey: "live.credit")
+        UserDefaults.standard.set(amount, forKey: "live.manualEnteredBalance")
         return true
     }
     func begin(_ language: String, partner: String) {
         guard PartnerLanguage(rawValue: partner) != nil,
               held == nil, !busy, (language == "ru" || language == partner) else { return }
         guard keySaved else { message = "Сначала добавь API-ключ в настройках"; return }
+        if language == "ru", partner == "ro" || partner == "pl" {
+            message = "Голосовой перевод на этот язык пока не поддерживается текущей моделью"
+            return
+        }
         stopPlayer()
         livePlayer?.stop()
         livePlayer = nil
+        removeShareFile()
         connection.cancel()
         operation?.cancel()
         generation = UUID()
@@ -125,6 +140,8 @@ import CryptoKit
                         case .success(let reply):
                             self.text = reply.text
                             self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
+                            self.keyVerified = true
+                            self.makeShareFile(for: reply.audio)
                             self.livePlayer?.confirmTranscript(reply.text)
                             self.details += "\n" + (language == "ru" ? "Русский → \(PartnerLanguage.current(partner).name)" : "\(PartnerLanguage.current(partner).name) → Русский") + " · ответ завершён"
                             self.livePlayer?.complete()
@@ -133,10 +150,11 @@ import CryptoKit
                             } else {
                                 self.phase = .idle
                                 self.message = reply.text.isEmpty
-                                    ? "Модель не вернула перевод. Запись можно проверить бесплатно."
+                                    ? "Модель не вернула перевод. Запись можно проверить."
                                     : (reply.audio.isEmpty ? "Получен только текст перевода" : "Готово · удерживай кнопку языка")
                             }
                         case .failure(let error):
+                            if (error as? WireError) == .authorization { self.keyVerified = false }
                             self.recorder.cancel()
                             self.livePlayer?.stop()
                             self.held = nil; self.phase = .idle
@@ -210,6 +228,21 @@ import CryptoKit
         held = nil; phase = .idle
     }
     func background() { stopAll(); message = "Готово · удерживай кнопку языка" }
+    private func removeShareFile() {
+        if let shareFile { try? FileManager.default.removeItem(at: shareFile) }
+        shareFile = nil; shareURL = nil
+    }
+    private func makeShareFile(for audio: Data) {
+        removeShareFile()
+        guard !audio.isEmpty else { return }
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Interpreter-translation-\(UUID().uuidString).wav")
+        do {
+            try audio.write(to: url, options: .atomic)
+            shareFile = url
+            shareURL = url
+        } catch { shareFile = nil; shareURL = nil }
+    }
     func replay() { if let audio = translatedWave, !busy { livePlayer?.stop(); play(audio, source: false) } }
     func review() { if let audio = recordedWave, !busy { livePlayer?.stop(); play(audio, source: true) } }
     private func play(_ audio: Data, source: Bool) {
@@ -222,7 +255,7 @@ import CryptoKit
             guard player.prepareToPlay() else { throw CocoaError(.fileReadCorruptFile) }
             self.player = player; player.delegate = self; player.volume = 1
             guard player.play() else { throw CocoaError(.fileReadCorruptFile) }
-            phase = .playing; message = source ? "Звучит твоя запись · бесплатно" : (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Исходный звук ответа · перевод не подтверждён" : "Звучит перевод · бесплатно")
+            phase = .playing; message = source ? "Звучит твоя запись" : (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Исходный звук ответа · перевод не подтверждён" : "Звучит перевод")
             playWatch = Task { [weak self, weak player] in
                 try? await Task.sleep(nanoseconds: UInt64((player?.duration ?? 0) + 5) * 1_000_000_000)
                 guard !Task.isCancelled, let self, let player, self.player === player else { return }
