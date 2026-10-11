@@ -1,6 +1,6 @@
 # Interpreter Live 1.2.0 (4) — instant translation with four language pairs and a live waveform
 
-One compact selector on the main screen chooses one of four partners:
+The tappable header «Русский ↔ Deutsch ⌄» opens a native compact menu to choose one of four partners:
 Deutsch (de), Română (ro), English (en), Polski (pl).
 Russian remains the fixed opposite language. Two explicit push-to-talk
 buttons instantly point at the selected target: Russian → partner or
