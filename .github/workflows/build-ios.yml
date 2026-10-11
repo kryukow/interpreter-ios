@@ -1,4 +1,4 @@
-name: Interpreter iOS
+name: Interpreter Live iOS
 on:
   workflow_dispatch:
   push:
@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: interpreter-${{ github.ref }}
+  group: interpreter-live-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   build:
@@ -15,63 +15,61 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Test translation stream failures and completion
+      - name: Test new WAV and dedicated translation protocol
         run: |
-          swiftc App/TranslationTextStream.swift scripts/test_translation_stream.swift -o "$RUNNER_TEMP/stream-tests"
-          "$RUNNER_TEMP/stream-tests"
-      - name: Test speech transcript across pauses
-        run: |
-          swiftc App/SpeechTranscript.swift scripts/test_speech_transcript.swift -o "$RUNNER_TEMP/speech-tests"
-          "$RUNNER_TEMP/speech-tests"
-      - name: Test realtime translation events and PCM playback
-        run: |
-          swiftc App/RealtimeProtocol.swift scripts/test_realtime_protocol.swift -o "$RUNNER_TEMP/realtime-tests"
-          "$RUNNER_TEMP/realtime-tests"
+          swiftc Live/TranslationWire.swift LiveTests/test_wire.swift -o "$RUNNER_TEMP/live-wire-tests"
+          "$RUNNER_TEMP/live-wire-tests"
       - name: Install XcodeGen
         run: brew install xcodegen
-      - name: Test local audio budget
-        run: |
-          swiftc App/RealtimeProtocol.swift App/AudioBudget.swift scripts/test_audio_budget.swift -o "$RUNNER_TEMP/budget-tests"
-          "$RUNNER_TEMP/budget-tests"
-      - name: Verify XcodeGen
-        run: xcodegen --version
-      - name: Test playback silence at both edges
-        run: |
-          swiftc App/PlaybackClip.swift scripts/test_playback_clip.swift -o "$RUNNER_TEMP/playback-tests"
-          "$RUNNER_TEMP/playback-tests"
-      - name: Verify build tools
-        run: xcodebuild -version
-      - name: Test 200 ms microphone frames
-        run: |
-          swiftc App/PCMFrames.swift scripts/test_pcm_frames.swift -o "$RUNNER_TEMP/frame-tests"
-          "$RUNNER_TEMP/frame-tests"
-      - name: Test quiet voice gain and clipping protection
-        run: |
-          swiftc App/PCMVoiceGain.swift scripts/test_pcm_voice_gain.swift -o "$RUNNER_TEMP/gain-tests"
-          "$RUNNER_TEMP/gain-tests"
-      - name: Verify build environment
-        run: xcodegen --version
-      - name: Generate project
+      - name: Generate completely separate Live project
+        working-directory: Live
         run: xcodegen generate
-      - name: Build simulator
+      - name: Ensure legacy Swift and speech permissions are excluded
         run: |
-          xcodebuild -project Interpreter.xcodeproj -scheme Interpreter -configuration Debug \
+          python3 - <<'PY'
+          from pathlib import Path
+          project = Path('Live/InterpreterLive.xcodeproj/project.pbxproj').read_text()
+          for old in Path('App').glob('*.swift'):
+              assert old.name not in project, old.name
+          for path in Path('Live').glob('*.swift'):
+              text = path.read_text()
+              for legacy in ('import Speech', 'AVSpeechSynthesizer', 'SFSpeechRecognizer', 'AVAudioEngine'):
+                  assert legacy not in text, (path, legacy)
+          print('Fresh Live sources only; shared icon assets permitted')
+          PY
+      - name: Build simulator
+        working-directory: Live
+        run: |
+          xcodebuild -project InterpreterLive.xcodeproj -scheme InterpreterLive -configuration Debug \
             -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
       - name: Build for iPhone
+        working-directory: Live
         run: |
-          xcodebuild -project Interpreter.xcodeproj -scheme Interpreter -configuration Release \
-            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/Device" \
+          xcodebuild -project InterpreterLive.xcodeproj -scheme InterpreterLive -configuration Release \
+            -destination 'generic/platform=iOS' -derivedDataPath "$RUNNER_TEMP/LiveDevice" \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO build
-      - name: Package unsigned IPA for signing in Feather
+      - name: Verify app identity and package for Feather
         run: |
-          mkdir -p "$RUNNER_TEMP/ipa/Payload"
-          cp -R "$RUNNER_TEMP/Device/Build/Products/Release-iphoneos/Interpreter.app" "$RUNNER_TEMP/ipa/Payload/"
-          cd "$RUNNER_TEMP/ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-0.4.9-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-0.4.9-Unsigned.ipa"
+          python3 - <<'PY'
+          import os, plistlib
+          from pathlib import Path
+          app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
+          info = plistlib.loads((app / 'Info.plist').read_bytes())
+          assert info['CFBundleIdentifier'] == 'org.interpreter.live'
+          assert info['CFBundleShortVersionString'] == '1.0.0'
+          assert info['CFBundleVersion'] == '1'
+          assert 'NSSpeechRecognitionUsageDescription' not in info
+          assert info['NSMicrophoneUsageDescription']
+          print('Verified new app identity, microphone only')
+          PY
+          mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
+          cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
+          cd "$RUNNER_TEMP/live-ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.0.0-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.0.0-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-0.4.9-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-0.4.9-Unsigned.ipa
+          name: Interpreter-Live-1.0.0-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.0.0-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
