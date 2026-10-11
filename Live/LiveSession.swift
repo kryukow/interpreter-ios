@@ -22,6 +22,7 @@ import CryptoKit
     private var operation: Task<Void, Never>?
     private var generation = UUID()
     private var player: AVAudioPlayer?
+    private var livePlayer: LiveStreamPlayer?
     private var playWatch: Task<Void, Never>?
     private var direction = "ru"
     var busy: Bool { phase != .idle && phase != .playing }
@@ -43,7 +44,11 @@ import CryptoKit
     func begin(_ language: String) {
         guard held == nil, !busy, ["ru", "de"].contains(language) else { return }
         guard keySaved else { message = "Сначала добавь API-ключ в настройках"; return }
-        stopPlayer(); connection.cancel(); operation?.cancel()
+        stopPlayer()
+        livePlayer?.stop()
+        livePlayer = nil
+        connection.cancel()
+        operation?.cancel()
         generation = UUID()
         let token = generation
         direction = language; held = language; phase = .arming
@@ -56,83 +61,142 @@ import CryptoKit
             guard !Task.isCancelled, self.generation == token, self.held == language else { return }
             guard allowed else {
                 self.held = nil; self.phase = .idle
-                self.message = "Разреши микрофон в настройках iPhone"; return
+                self.message = "Разреши микрофон в настройках iPhone"
+                return
             }
             do {
+                guard let key = try LiveKey.read() else { throw LiveKey.KeyError.invalid }
+                let stream = LiveStreamPlayer()
+                stream.onStart = { [weak self] in
+                    guard let self, self.generation == token else { return }
+                    self.phase = .playing
+                    self.message = "Звучит перевод · можно слушать сразу"
+                }
+                stream.onEnd = { [weak self] in
+                    guard let self, self.generation == token else { return }
+                    self.phase = .idle
+                    self.message = "Готово · удерживай кнопку языка"
+                }
+                self.livePlayer = stream
+
                 try self.recorder.begin(onMeter: { [weak self] seconds, level in
                     guard let self, self.generation == token, self.phase == .recording else { return }
                     self.elapsed = seconds
                     self.levels.removeFirst(); self.levels.append(level)
+                }, onFrame: { [weak self] pcm in
+                    guard let self, self.generation == token else { return }
+                    self.connection.append(pcm)
                 }, onAutomaticStop: { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.end(language)
                 })
-                self.phase = .recording; self.message = "Запись · говори, затем отпусти"
+                self.phase = .recording
+                self.message = "Запись + онлайн-перевод · говори, затем отпусти"
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
+
+                var submitted = 0
+                try self.connection.start(key: key, target: language == "ru" ? "de" : "ru",
+                    onText: { [weak self] value in
+                        guard let self, self.generation == token else { return }
+                        self.text = value
+                        self.livePlayer?.confirmTranscript(value)
+                    }, onAudio: { [weak self] delta in
+                        guard let self, self.generation == token else { return }
+                        self.livePlayer?.append(delta)
+                    }, onProgress: { [weak self] count in
+                        guard let self, self.generation == token else { return }
+                        let added = max(0, count - submitted)
+                        submitted = count
+                        self.spent += Double(added) / 48_000 / 60 * 0.034
+                        UserDefaults.standard.set(self.spent, forKey: "live.spent")
+                        if self.phase == .sending || self.phase == .connecting {
+                            self.message = "Отправляю последние фрагменты · микрофон выключен"
+                        }
+                    }, onWaiting: { [weak self] in
+                        guard let self, self.generation == token else { return }
+                        if self.phase != .playing {
+                            self.phase = .waiting
+                            self.message = "Запись завершена · ожидаю остаток перевода"
+                        }
+                    }, onFinished: { [weak self] result in
+                        guard let self, self.generation == token else { return }
+                        switch result {
+                        case .success(let reply):
+                            self.text = reply.text
+                            self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
+                            self.livePlayer?.confirmTranscript(reply.text)
+                            self.details += "\n" + (language == "ru" ? "Русский → Deutsch" : "Deutsch → Русский") + " · ответ завершён"
+                            self.livePlayer?.complete()
+                            if self.livePlayer?.isPlaying == true {
+                                self.phase = .playing
+                            } else {
+                                self.phase = .idle
+                                self.message = reply.text.isEmpty
+                                    ? "Модель не вернула перевод. Запись можно проверить бесплатно."
+                                    : (reply.audio.isEmpty ? "Получен только текст перевода" : "Готово · удерживай кнопку языка")
+                            }
+                        case .failure(let error):
+                            self.recorder.cancel()
+                            self.livePlayer?.stop()
+                            self.held = nil; self.phase = .idle
+                            self.message = (error as? LocalizedError)?.errorDescription
+                                ?? "Соединение прервалось. Проверь запись и повтори."
+                        }
+                    })
             } catch {
                 guard self.generation == token else { return }
-                self.recorder.cancel(); self.held = nil; self.phase = .idle
-                self.message = "Не удалось начать запись. Проверь разрешение микрофона."
+                self.recorder.cancel(); self.connection.cancel(); self.livePlayer?.stop()
+                self.held = nil; self.phase = .idle
+                self.message = (error as? LocalizedError)?.errorDescription
+                    ?? "Не удалось начать запись или подключить перевод"
             }
         }
     }
+
     func end(_ language: String) {
         guard held == language else { return }
         held = nil
         if phase == .arming {
-            generation = UUID(); operation?.cancel(); recorder.cancel()
+            generation = UUID(); operation?.cancel(); recorder.cancel(); connection.cancel()
             phase = .idle; message = "Запись не началась. Удерживай до вибросигнала."
             return
         }
         guard phase == .recording else { return }
-        // Stop the hardware synchronously, before starting any upload task.
-        do {
-            let wave = try recorder.finish()
-            let pcm = try WavePCM.decode(wave)
-            recordedWave = try WavePCM.encode(pcm)
-            elapsed = Double(pcm.count) / 48000
-            details = String(format: "Записано %.1f с · без обработки", elapsed)
-            details += "\nЗапись " + String(SHA256.hash(data: pcm).map { String(format: "%02x", $0) }.joined().prefix(12))
-            guard pcm.count >= 4800 else { phase = .idle; message = "Запись слишком короткая"; return }
-            phase = .connecting; message = "Микрофон выключен · подключаю перевод"
-            let token = generation
-            operation = Task { [weak self] in
-                guard let self else { return }
+        phase = .sending
+        message = "Микрофон выключен · завершаю передачу"
+        let token = generation
+        recorder.finish { [weak self] result in
+            guard let self, self.generation == token else { return }
+            switch result {
+            case .success(let wave):
                 do {
-                    guard let key = try LiveKey.read() else { throw LiveKey.KeyError.invalid }
-                    var submitted = 0
-                    let reply = try await self.connection.run(key: key, pcm: pcm,
-                        target: language == "ru" ? "de" : "ru", onText: { [weak self] text in
-                            guard let self, self.generation == token else { return }
-                            self.text = text
-                        }, onProgress: { [weak self] count in
-                            guard let self, self.generation == token else { return }
-                            let added = max(0, count - submitted)
-                            submitted = count
-                            self.spent += Double(added) / 48000 / 60 * 0.034
-                            UserDefaults.standard.set(self.spent, forKey: "live.spent")
-                            self.phase = .sending
-                            self.message = String(format: "Отправка · %.1f / %.1f с\nМикрофон выключен", Double(submitted) / 48000, self.elapsed)
-                        }, onWaiting: { [weak self] in
-                            guard let self, self.generation == token else { return }
-                            self.phase = .waiting; self.message = "Запись отправлена · ожидаю перевод"
-                        })
-                    guard !Task.isCancelled, self.generation == token else { return }
-                    self.text = reply.text
-                    self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
-                    self.phase = .idle
-                    self.details += "\n" + (language == "ru" ? "Русский → Deutsch" : "Deutsch → Русский") + " · ответ завершён"
-                    if !reply.audio.isEmpty && !reply.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.play(reply.audio, source: false) }
-                    else { self.message = reply.text.isEmpty ? "Модель не вернула перевод. Запись можно проверить бесплатно." : "Получен текст перевода, без звука" }
+                    let pcm = try WavePCM.decode(wave)
+                    self.recordedWave = wave
+                    self.elapsed = Double(pcm.count) / 48_000
+                    self.details = String(format: "Записано %.1f с · передавалось во время речи", self.elapsed)
+                    self.details += "\nЗапись " + String(SHA256.hash(data: pcm).map { String(format: "%02x", $0) }.joined().prefix(12))
+                    guard pcm.count >= 4_800 else {
+                        self.connection.cancel(); self.livePlayer?.stop()
+                        self.phase = .idle; self.message = "Запись слишком короткая"
+                        return
+                    }
+                    self.livePlayer?.microphoneReleased()
+                    self.connection.finishInput()
+                    if self.phase != .playing {
+                        self.phase = .waiting
+                        self.message = "Микрофон выключен · завершаю перевод"
+                    }
                 } catch {
-                    guard self.generation == token else { return }
+                    self.connection.cancel(); self.livePlayer?.stop()
                     self.phase = .idle
-                    self.message = error is CancellationError ? "Остановлено" : (error as? LocalizedError)?.errorDescription ?? "Соединение прервалось. Запись доступна для проверки."
+                    self.message = "Не удалось сохранить запись микрофона"
                 }
+            case .failure(let error):
+                self.connection.cancel(); self.livePlayer?.stop()
+                self.phase = .idle
+                self.message = (error as? LocalizedError)?.errorDescription
+                    ?? "Не удалось завершить запись"
             }
-        } catch {
-            recorder.cancel(); phase = .idle
-            message = (error as? LocalizedError)?.errorDescription ?? "Не удалось прочитать запись микрофона"
         }
     }
     func abortPress(_ language: String) {
@@ -141,12 +205,12 @@ import CryptoKit
     }
     func stopAll() {
         generation = UUID(); operation?.cancel(); operation = nil
-        recorder.cancel(); connection.cancel(); stopPlayer()
+        recorder.cancel(); connection.cancel(); livePlayer?.stop(); livePlayer = nil; stopPlayer()
         held = nil; phase = .idle
     }
     func background() { stopAll(); message = "Готово · удерживай кнопку языка" }
-    func replay() { if let audio = translatedWave, !busy { play(audio, source: false) } }
-    func review() { if let audio = recordedWave, !busy { play(audio, source: true) } }
+    func replay() { if let audio = translatedWave, !busy { livePlayer?.stop(); play(audio, source: false) } }
+    func review() { if let audio = recordedWave, !busy { livePlayer?.stop(); play(audio, source: true) } }
     private func play(_ audio: Data, source: Bool) {
         stopPlayer()
         do {
