@@ -41,6 +41,7 @@ import CryptoKit
     @Published private(set) var keySaved = false
     @Published private(set) var keyStatus: KeyStatus = .missing
     var keyVerified: Bool { if case .accepted = keyStatus { return true }; return false }
+    var keyStatusIsRejected: Bool { if case .rejected = keyStatus { return true }; return false }
     @Published private(set) var shareURL: URL?
     @Published private(set) var spent = UserDefaults.standard.double(forKey: "live.spent")
     @Published private(set) var credit: Double? = UserDefaults.standard.object(forKey: "live.credit") as? Double
