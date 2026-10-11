@@ -1,133 +1,173 @@
 import AVFoundation
 import Foundation
+import UIKit
 
-@MainActor final class NativeRecorder: NSObject, AVAudioRecorderDelegate {
-    private var recorder: AVAudioRecorder?
-    private var recordingURL: URL?
-    private var meterTask: Task<Void, Never>?
-    private var automaticStop: (() -> Void)?
+/// 24 kHz PCM16 microphone capture with live 200 ms frame delivery.
+/// Audio is retained in memory for the user's optional WAV export; no voice enhancement.
+@MainActor final class NativeRecorder {
+    private var engine: AVAudioEngine?
+    private var converter: AVAudioConverter?
+    private var samples = Data()
+    private var pending = Data()
+    private var onMeter: ((Double, Double) -> Void)?
+    private var onFrame: ((Data) -> Void)?
+    private var onAutomaticStop: (() -> Void)?
     private var generation = UUID()
-    private var recordingFailed = false
+    private var active = false
 
     func preparePermission() async -> Bool {
         await AVCaptureDevice.requestAccess(for: .audio)
     }
 
     func begin(onMeter: @escaping (Double, Double) -> Void,
+               onFrame: @escaping (Data) -> Void,
                onAutomaticStop: @escaping () -> Void) throws {
         cancel()
         let token = generation
         let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.record, mode: .default)
+        try session.setActive(true)
+        if let mic = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
+            try session.setPreferredInput(mic)
+        }
+        let engine = AVAudioEngine()
+        let node = engine.inputNode
+        let inputFormat = node.outputFormat(forBus: 0)
+        guard inputFormat.sampleRate > 0,
+              inputFormat.commonFormat == .pcmFormatFloat32, !inputFormat.isInterleaved,
+              let outputFormat = AVAudioFormat(commonFormat: .pcmFormatInt16,
+                                                sampleRate: 24_000, channels: 1,
+                                                interleaved: false),
+              let converter = AVAudioConverter(from: inputFormat, to: outputFormat) else {
+            throw RecordingError.audioFormat
+        }
+        self.engine = engine
+        self.converter = converter
+        self.onMeter = onMeter
+        self.onFrame = onFrame
+        self.onAutomaticStop = onAutomaticStop
+        active = true
+        // Copy from the real-time audio thread; resample on the main queue.
+        // The completion callback on release is enqueued after these frame callbacks.
+        node.installTap(onBus: 0, bufferSize: 1_024, format: inputFormat) { [weak self] buffer, _ in
+            guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format,
+                                              frameCapacity: buffer.frameLength),
+                  let source = buffer.floatChannelData,
+                  let destination = copy.floatChannelData else { return }
+            copy.frameLength = buffer.frameLength
+            let size = Int(buffer.frameLength) * MemoryLayout<Float>.size
+            for channel in 0..<Int(buffer.format.channelCount) {
+                memcpy(destination[channel], source[channel], size)
+            }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.active, self.generation == token else { return }
+                self.consume(copy)
+            }
+        }
         do {
-            try session.setCategory(.record, mode: .default)
-            try session.setActive(true)
-            if let builtIn = session.availableInputs?.first(where: { $0.portType == .builtInMic }) {
-                try session.setPreferredInput(builtIn)
-            }
-            let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("Interpreter-native-\(UUID().uuidString).wav")
-            recordingURL = url
-            let settings: [String: Any] = [
-                AVFormatIDKey: Int(kAudioFormatLinearPCM),
-                AVSampleRateKey: 24_000.0,
-                AVNumberOfChannelsKey: 1,
-                AVLinearPCMBitDepthKey: 16,
-                AVLinearPCMIsBigEndianKey: false,
-                AVLinearPCMIsFloatKey: false,
-                AVLinearPCMIsNonInterleaved: false
-            ]
-            let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.delegate = self
-            recorder.isMeteringEnabled = true
-            self.recorder = recorder
-            automaticStop = onAutomaticStop
-            guard recorder.prepareToRecord(), recorder.record(forDuration: 60) else {
-                throw RecordingError.cannotStart
-            }
+            try engine.start()
             onMeter(0, 0)
-            meterTask = Task { [weak self, weak recorder] in
-                while !Task.isCancelled {
-                    try? await Task.sleep(nanoseconds: 100_000_000)
-                    guard !Task.isCancelled, let self, let recorder,
-                          self.generation == token, self.recorder === recorder,
-                          recorder.isRecording else { return }
-                    recorder.updateMeters()
-                    let level = min(1, max(0, pow(10, Double(recorder.averagePower(forChannel: 0)) / 20)))
-                    onMeter(recorder.currentTime, level)
-                }
-            }
         } catch {
             cancel()
             throw error
         }
     }
 
-    func finish() throws -> Data {
-        guard let recorder, let url = recordingURL else { throw RecordingError.noRecording }
-        let failed = recordingFailed
-        generation = UUID()
-        meterTask?.cancel(); meterTask = nil
-        automaticStop = nil
-        self.recorder = nil
-        recorder.delegate = nil
-        recorder.stop()
-        defer {
-            removeRecordingFile()
-            deactivateSession()
+    private func consume(_ input: AVAudioPCMBuffer) {
+        guard active, let converter else { return }
+        let capacity = AVAudioFrameCount(ceil(Double(input.frameLength) *
+                                            24_000 / input.format.sampleRate) + 256)
+        guard let target = AVAudioPCMBuffer(pcmFormat: converter.outputFormat,
+                                             frameCapacity: max(capacity, 512)) else { return }
+        var delivered = false
+        var failure: NSError?
+        let status = converter.convert(to: target, error: &failure) { _, state in
+            if delivered { state.pointee = .noDataNow; return nil }
+            delivered = true
+            state.pointee = .haveData
+            return input
         }
-        guard !failed else { throw RecordingError.failedRecording }
-        let wav = try Data(contentsOf: url)
-        guard !wav.isEmpty else { throw RecordingError.emptyRecording }
-        return wav
+        guard failure == nil, status != .error, target.frameLength > 0,
+              let channel = target.int16ChannelData?[0] else { return }
+        let byteCount = Int(target.frameLength) * 2
+        let room = WavePCM.maximumInputBytes - samples.count
+        guard room > 0 else { return }
+        let length = min(byteCount, room)
+        let pcm = Data(bytes: channel, count: length)
+        samples.append(pcm)
+        pending.append(pcm)
+        while pending.count >= WavePCM.frameBytes {
+            let frame = Data(pending.prefix(WavePCM.frameBytes))
+            pending.removeFirst(WavePCM.frameBytes)
+            onFrame?(frame)
+        }
+        var peak: Float = 0
+        if let values = input.floatChannelData?[0] {
+            for i in 0..<Int(input.frameLength) { peak = max(peak, abs(values[i])) }
+        }
+        onMeter?(Double(samples.count) / 48_000, min(1, Double(peak)))
+        if samples.count >= WavePCM.maximumInputBytes { onAutomaticStop?() }
+    }
+
+    /// Stops the hardware immediately and drains already queued capture callbacks
+    /// on the next main queue turn before committing the last (padded) frame.
+    func finish(_ completion: @escaping (Result<Data, Error>) -> Void) {
+        guard active else { completion(.failure(RecordingError.noRecording)); return }
+        stopHardware()
+        let token = generation
+        // Do not invalidate the generation until the main-queue audio frames drain.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.generation == token else {
+                completion(.failure(RecordingError.noRecording)); return
+            }
+            do {
+                if !self.pending.isEmpty {
+                    var tail = self.pending
+                    tail.append(Data(repeating: 0,
+                                     count: WavePCM.frameBytes - tail.count))
+                    self.onFrame?(tail)
+                }
+                let wav = try WavePCM.encode(self.samples)
+                self.resetCapture()
+                completion(.success(wav))
+            } catch {
+                self.resetCapture()
+                completion(.failure(error))
+            }
+        }
     }
 
     func cancel() {
-        generation = UUID()
-        meterTask?.cancel(); meterTask = nil
-        automaticStop = nil
-        recordingFailed = false
-        let previous = recorder
-        recorder = nil
-        previous?.delegate = nil
-        previous?.stop()
-        removeRecordingFile()
-        deactivateSession()
+        stopHardware()
+        resetCapture()
     }
 
-    private func removeRecordingFile() {
-        guard let url = recordingURL else { return }
-        recordingURL = nil
-        // This URL is assigned only when this instance creates its unique recording.
-        try? FileManager.default.removeItem(at: url)
-    }
-
-    private func deactivateSession() {
+    private func stopHardware() {
+        if let engine {
+            engine.inputNode.removeTap(onBus: 0)
+            engine.stop()
+        }
+        engine = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
 
-    nonisolated func audioRecorderDidFinishRecording(_ recorder: AVAudioRecorder, successfully flag: Bool) {
-        Task { @MainActor [weak self] in
-            guard let self, self.recorder === recorder else { return }
-            self.recordingFailed = self.recordingFailed || !flag
-            self.meterTask?.cancel(); self.meterTask = nil
-            let callback = self.automaticStop
-            self.automaticStop = nil
-            callback?()
-        }
-    }
-
-    nonisolated func audioRecorderEncodeErrorDidOccur(_ recorder: AVAudioRecorder, error: Error?) {
-        audioRecorderDidFinishRecording(recorder, successfully: false)
+    private func resetCapture() {
+        generation = UUID()
+        active = false
+        converter = nil
+        samples = Data()
+        pending = Data()
+        onMeter = nil
+        onFrame = nil
+        onAutomaticStop = nil
     }
 
     private enum RecordingError: LocalizedError {
-        case cannotStart, noRecording, emptyRecording, failedRecording
+        case audioFormat, noRecording
         var errorDescription: String? {
             switch self {
-            case .cannotStart: return "Не удалось начать запись микрофона."
-            case .noRecording: return "Запись микрофона отсутствует."
-            case .emptyRecording: return "Микрофон вернул пустую запись."
-            case .failedRecording: return "Запись микрофона завершилась с ошибкой. Попробуй ещё раз."
+            case .audioFormat: return "Не удалось включить аудиовход iPhone (PCM 24 кГц)."
+            case .noRecording: return "Запись отсутствует или отменена."
             }
         }
     }
