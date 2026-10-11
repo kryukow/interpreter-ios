@@ -27,34 +27,38 @@ struct LiveView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("INTERPRETER LIVE").font(.caption2).tracking(3).foregroundStyle(.secondary)
-                    Text("Русский ↔ \(partner.name)").font(.title2.bold())
+                    Menu {
+                        ForEach(PartnerLanguage.allCases) { choice in
+                            Button {
+                                guard model.phase == .idle else { return }
+                                partnerCode = choice.rawValue
+                            } label: {
+                                if partner == choice {
+                                    Label(choice.flag + " Русский ↔ " + choice.name, systemImage: "checkmark")
+                                } else {
+                                    Text(choice.flag + " Русский ↔ " + choice.name)
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("Русский ↔ \(partner.name)")
+                                .font(.title2.bold())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
+                            Image(systemName: "chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.phase != .idle)
+                    .accessibilityLabel("Выбрать языки разговора: русский и \(partner.name)")
                 }
                 Spacer()
                 Button { model.stopAll(); settings = true } label: {
                     Image(systemName: "gearshape.fill").font(.title2)
                 }.disabled(model.busy).accessibilityLabel("Настройки")
-            }
-            HStack(spacing: 6) {
-                ForEach(PartnerLanguage.allCases) { choice in
-                    Button {
-                        guard model.phase == .idle else { return }
-                        partnerCode = choice.rawValue
-                    } label: {
-                        HStack(spacing: 4) {
-                            Text(choice.flag)
-                            Text(choice.name).lineLimit(1).minimumScaleFactor(0.75)
-                        }
-                        .font(.system(size: 11, weight: .semibold))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .foregroundStyle(partner == choice ? Color.black : Color.white)
-                        .background(partner == choice ? Color.white : Color(white: 0.14),
-                                    in: RoundedRectangle(cornerRadius: 12))
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(model.phase != .idle)
-                    .accessibilityLabel("Выбрать язык \(choice.name)")
-                }
             }
             Image(systemName: "infinity").font(.system(size: 52, weight: .light))
             MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
