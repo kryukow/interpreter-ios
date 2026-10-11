@@ -44,7 +44,7 @@ import Foundation
         for shift in 0..<4 { decorated[4 + shift] = UInt8((riffSize >> (shift * 8)) & 255) }
         expect(try WavePCM.decode(decorated) == pcm, "Metadata scan changed PCM")
 
-        for target in ["ru", "de"] {
+        for target in ["ru", "de", "ro", "en", "pl"] {
             let config = try JSONSerialization.jsonObject(with: Data(TranslationWire.configuration(target: target).utf8)) as! [String: Any]
             expect(config["type"] as? String == "session.update", "Wrong config event")
             let session = config["session"] as! [String: Any]
