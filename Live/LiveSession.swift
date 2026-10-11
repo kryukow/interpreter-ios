@@ -11,7 +11,7 @@ import CryptoKit
     @Published private(set) var text = ""
     @Published private(set) var details = ""
     @Published private(set) var elapsed = 0.0
-    @Published private(set) var levels = Array(repeating: 0.0, count: 40)
+    @Published private(set) var levels = Array(repeating: 0.0, count: 48)
     @Published private(set) var recordedWave: Data?
     @Published private(set) var translatedWave: Data?
     @Published private(set) var keySaved = false
@@ -41,8 +41,9 @@ import CryptoKit
         UserDefaults.standard.set(amount + spent, forKey: "live.credit")
         return true
     }
-    func begin(_ language: String) {
-        guard held == nil, !busy, ["ru", "de"].contains(language) else { return }
+    func begin(_ language: String, partner: String) {
+        guard PartnerLanguage(rawValue: partner) != nil,
+              held == nil, !busy, (language == "ru" || language == partner) else { return }
         guard keySaved else { message = "Сначала добавь API-ключ в настройках"; return }
         stopPlayer()
         livePlayer?.stop()
@@ -52,7 +53,7 @@ import CryptoKit
         generation = UUID()
         let token = generation
         direction = language; held = language; phase = .arming
-        elapsed = 0; levels = Array(repeating: 0, count: 40)
+        elapsed = 0; levels = Array(repeating: 0, count: 48)
         text = ""; details = ""; recordedWave = nil; translatedWave = nil
         message = "Готовлю микрофон · пока не говори"
         operation = Task { [weak self] in
@@ -95,7 +96,7 @@ import CryptoKit
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
 
                 var submitted = 0
-                try self.connection.start(key: key, target: language == "ru" ? "de" : "ru",
+                try self.connection.start(key: key, target: language == "ru" ? partner : "ru",
                     onText: { [weak self] value in
                         guard let self, self.generation == token else { return }
                         self.text = value
@@ -125,7 +126,7 @@ import CryptoKit
                             self.text = reply.text
                             self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
                             self.livePlayer?.confirmTranscript(reply.text)
-                            self.details += "\n" + (language == "ru" ? "Русский → Deutsch" : "Deutsch → Русский") + " · ответ завершён"
+                            self.details += "\n" + (language == "ru" ? "Русский → \(PartnerLanguage.current(partner).name)" : "\(PartnerLanguage.current(partner).name) → Русский") + " · ответ завершён"
                             self.livePlayer?.complete()
                             if self.livePlayer?.isPlaying == true {
                                 self.phase = .playing
