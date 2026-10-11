@@ -235,15 +235,13 @@ struct LiveSettings: View {
                     Text("Отдельная платная модель OpenAI для голосового перевода.").font(.footnote)
                 }
                 Section("API-ключ") {
-                    HStack {
-                        Image(systemName: model.keyVerified ? "checkmark.seal.fill" :
-                              model.keySaved ? "key.fill" : "key")
-                            .foregroundStyle(model.keyVerified ? Color.green : Color.secondary)
-                        Text(model.keyVerified ? "Ключ принят" :
-                             model.keySaved ? "Ключ сохранён · не проверен" : "Добавь API-ключ OpenAI")
-                            .foregroundStyle(model.keyVerified ? Color.green : Color.primary)
+                    HStack(spacing: 10) {
+                        Image(systemName: model.keyStatus.symbol)
+                        Text(model.keyStatus.title)
                     }
-                    .font(.footnote)
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(model.keyVerified ? Color.green :
+                                     model.keyStatusIsRejected ? Color.red : Color.secondary)
                     SecureField("Вставь API-ключ", text: $key)
                         .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Вставить из буфера") { key = UIPasteboard.general.string ?? "" }
