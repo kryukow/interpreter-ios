@@ -44,6 +44,15 @@ import Foundation
         for shift in 0..<4 { decorated[4 + shift] = UInt8((riffSize >> (shift * 8)) & 255) }
         expect(try WavePCM.decode(decorated) == pcm, "Metadata scan changed PCM")
 
+        expect(PartnerLanguage.allCases.map(\.rawValue) == ["de", "ro", "en", "pl"],
+               "Unexpected partner languages")
+        expect(PartnerLanguage.current("unknown") == .de, "Unsupported saved language must fall back to German")
+        for partner in PartnerLanguage.allCases {
+            expect(partner.outputCode(whenSourceIsRussian: true) == partner.rawValue,
+                   "Russian must translate to explicitly chosen partner")
+            expect(partner.outputCode(whenSourceIsRussian: false) == "ru",
+                   "Partner must always translate to Russian")
+        }
         for target in ["ru", "de", "ro", "en", "pl"] {
             let config = try JSONSerialization.jsonObject(with: Data(TranslationWire.configuration(target: target).utf8)) as! [String: Any]
             expect(config["type"] as? String == "session.update", "Wrong config event")
