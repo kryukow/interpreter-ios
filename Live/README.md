@@ -1,32 +1,31 @@
-# Interpreter Live 1.0.0 (1)
+# Interpreter Live 1.1.0 (3) — lower-latency streaming
 
-New API-only iPhone application. Bundle identifier `org.interpreter.live`.
-Old `App/` Swift files are excluded entirely; only the existing icon asset catalog is reused.
+Two press-and-hold buttons: Russian → German and German → Russian.
 
-Native AVAudioRecorder creates mono 24 kHz PCM16 WAV through the built-in microphone.
-Press starts recording after permission; haptic signals successful start. Release stops the
-recorder synchronously. Release while permission is pending never starts a later recording.
-Limit: 60 seconds. Native audio is not normalized, gated, trimmed, or supplemented with silence.
+While pressed, AVAudioEngine records the built-in microphone (24 kHz mono PCM16)
+and immediately streams 200 ms audio frames over one WebSocket to
+`/v1/realtime/translations?model=gpt-realtime-translate`.
+No second real-time-length upload occurs after releasing the button.
+Pending microphone frames queue while the socket connects.
+On release, the app drains the final frame and sends `session.close`.
+It receives audio and transcript deltas until `session.closed`.
 
-Dedicated `/v1/realtime/translations?model=gpt-realtime-translate` only.
-One fresh connection per phrase and target language, input noise reduction and transcription off.
-Immutable PCM uploads in 200 ms frames, with an unchanged short final frame. `session.close`
-flushes output; receive until `session.closed`. No retries, prompts, tools, subscription login,
-Apple Speech, Apple synthesis, or automatic extra model requests.
+Translated audio is buffered while the microphone is active, then played
+incrementally once the button is released and translation text is available,
+using AVAudioPlayerNode. This prevents the phone speaker from feeding back
+into the microphone. Unconfirmed audio (no transcript) is not auto-played.
+Playback does not wait for the full transcript or the full `session.closed`.
 
-The recording indicator and elapsed seconds exist only while recording. Upload shows its own
-byte/duration progress with microphone off. Cost estimate counts transmitted samples once;
-initial platform balance is entered manually. Replay is local, untrimmed AVAudioPlayer output.
+The source recording is retained as original PCM data wrapped in WAV for
+optional listening/export. The finished translated recording can be replayed
+offline without another API request. Input noise reduction and extra
+transcription are disabled. No extra paid model calls or retries.
 
-Temporary recording files are removed after reading/cancel. Latest input/output bytes stay in
-memory; exporting WAV is an explicit user action. Unique new Keychain service; no key migration.
-Background/inactive scene cancels microphone, sender, websocket and playback.
+The input cap is 60 seconds, old requests are cancelled on a new press or
+backgrounding, and API key remains in the device-only Keychain.
+The balance and costs are estimates, not verified OpenAI billing figures.
 
-Build with `cd Live && xcodegen generate`, then scheme `InterpreterLive`.
-Offline protocol checks: `swiftc Live/TranslationWire.swift LiveTests/test_wire.swift -o wire-tests`.
-Real microphone and bilingual translation quality require an iPhone test, not just compilation.
-
-References:
-- https://developers.openai.com/api/docs/guides/realtime-translation
-- https://developers.openai.com/api/reference/resources/realtime/translation-client-events
-- https://developers.openai.com/api/docs/models/gpt-realtime-translate
+Build: `cd Live && xcodegen generate`, scheme `InterpreterLive`.
+GitHub Actions builds simulator and iPhone unsigned IPA. It is not an
+on-device integration test: latency, audio route and spoken translation must
+be verified on iPhone before treating this version as production-ready.

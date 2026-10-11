@@ -2,78 +2,84 @@ import Foundation
 
 struct TranslationReply {
     let text: String
-    /// Complete response WAV. Empty when the service supplied text only.
+    /// Complete response WAV for free replay. Empty for text-only results.
     let audio: Data
 }
 
+/// A single WebSocket translation session per held phrase.
+/// Microphone audio enters the outgoing queue in real time, not after release.
 @MainActor final class TranslationConnection {
     private var generation = UUID()
     private var currentSocket: URLSessionWebSocketTask?
-    private var currentSender: Task<Void, Never>?
+    private var currentSession: URLSession?
+    private var receiver: Task<Void, Never>?
+    private var sender: Task<Void, Never>?
+    private var watchdog: Task<Void, Never>?
+    private var frames: [Data] = []
+    private var ready = false
+    private var inputEnded = false
+    private var closeSent = false
+    private var sentBytes = 0
+    private var receivedBytes = 0
+    private var text = ""
+    private var audio = Data()
+    private var onText: ((String) -> Void)?
+    private var onAudio: ((Data) -> Void)?
+    private var onProgress: ((Int) -> Void)?
+    private var onWaiting: (() -> Void)?
+    private var onFinished: ((Result<TranslationReply, Error>) -> Void)?
 
     func cancel() {
         generation = UUID()
-        currentSender?.cancel(); currentSender = nil
-        currentSocket?.cancel(with: .goingAway, reason: nil); currentSocket = nil
+        sender?.cancel()
+        receiver?.cancel()
+        watchdog?.cancel()
+        currentSocket?.cancel(with: .goingAway, reason: nil)
+        currentSession?.invalidateAndCancel()
+        receiver = nil; sender = nil; watchdog = nil
+        currentSocket = nil; currentSession = nil
+        frames.removeAll()
+        ready = false; inputEnded = false; closeSent = false
+        sentBytes = 0; receivedBytes = 0
+        text = ""; audio = Data()
+        onText = nil; onAudio = nil; onProgress = nil
+        onWaiting = nil; onFinished = nil
     }
 
-    func run(key: String, pcm: Data, target: String,
-             onText: @escaping @MainActor (String) -> Void,
-             onProgress: @escaping @MainActor (Int) -> Void,
-             onWaiting: @escaping @MainActor () -> Void) async throws -> TranslationReply {
-        try Task.checkCancellation()
-        let frames = try WavePCM.frames(pcm)
+    func start(key: String, target: String,
+               onText: @escaping (String) -> Void,
+               onAudio: @escaping (Data) -> Void,
+               onProgress: @escaping (Int) -> Void,
+               onWaiting: @escaping () -> Void,
+               onFinished: @escaping (Result<TranslationReply, Error>) -> Void) throws {
         let update = try TranslationWire.configuration(target: target)
-        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw WireError.authorization }
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw WireError.authorization
+        }
         cancel()
         let token = generation
+        self.onText = onText; self.onAudio = onAudio
+        self.onProgress = onProgress; self.onWaiting = onWaiting
+        self.onFinished = onFinished
+
         var request = URLRequest(url: TranslationWire.endpoint)
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 20
-        config.timeoutIntervalForResource = 110
+        config.timeoutIntervalForResource = 120
         let session = URLSession(configuration: config)
         let socket = session.webSocketTask(with: request)
+        currentSession = session
         currentSocket = socket
-        var sender: Task<Void, Never>?
-        var watchdog: Task<Void, Never>?
-        var timedOut = false
-        var sendError: Error?
-        var sentBytes = 0
-        var closeRequested = false
-        var configured = false
-        var created = false
-        var text = ""
-        var audio = Data()
-
-        func armTimeout(_ seconds: Double) {
-            watchdog?.cancel()
-            watchdog = Task { @MainActor in
-                do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
-                catch { return }
-                timedOut = true
-                sender?.cancel()
-                socket.cancel(with: .goingAway, reason: nil)
-            }
-        }
-
-        defer {
-            watchdog?.cancel(); sender?.cancel()
-            socket.cancel(with: .normalClosure, reason: nil)
-            session.invalidateAndCancel()
-            if generation == token { currentSocket = nil; currentSender = nil }
-        }
         socket.resume()
-        armTimeout(20)
+        armTimeout(20, token: token)
 
-        do {
-            return try await withTaskCancellationHandler {
-                while true {
-                    try Task.checkCancellation()
-                    guard generation == token else { throw CancellationError() }
+        receiver = Task { [weak self] in
+            guard let self else { return }
+            do {
+                while !Task.isCancelled, self.generation == token {
                     let message = try await socket.receive()
-                    try Task.checkCancellation()
-                    guard generation == token else { throw CancellationError() }
+                    guard !Task.isCancelled, self.generation == token else { return }
                     let data: Data
                     switch message {
                     case .string(let value): data = Data(value.utf8)
@@ -82,73 +88,107 @@ struct TranslationReply {
                     }
                     switch try TranslationWire.event(data) {
                     case .created:
-                        guard !created else { throw WireError.invalidResponse }
-                        created = true
                         try await socket.send(.string(update))
-                    case .updated(let language):
-                        guard created, language == target else { throw WireError.configuration }
-                        guard !configured else { continue }
-                        configured = true
-                        armTimeout(Double(pcm.count) / Double(WavePCM.bytesPerSecond) + 40)
-                        sender = Task { @MainActor in
-                            do {
-                                for frame in frames {
-                                    try Task.checkCancellation()
-                                    guard self.generation == token else { throw CancellationError() }
-                                    try await socket.send(.string(try TranslationWire.append(frame)))
-                                    try Task.checkCancellation()
-                                    guard self.generation == token else { throw CancellationError() }
-                                    sentBytes += frame.count
-                                    onProgress(sentBytes)
-                                    // Preserve source time rather than dumping a whole phrase at once.
-                                    try await Task.sleep(nanoseconds: 200_000_000)
-                                }
-                                try Task.checkCancellation()
-                                guard self.generation == token else { throw CancellationError() }
-                                closeRequested = true
-                                try await socket.send(.string("{\"type\":\"session.close\"}"))
-                                try Task.checkCancellation()
-                                guard self.generation == token else { throw CancellationError() }
-                                onWaiting()
-                            } catch {
-                                sendError = error
-                                socket.cancel(with: .goingAway, reason: nil)
-                            }
-                        }
-                        currentSender = sender
+                    case .updated(let targetLanguage):
+                        guard targetLanguage == target else { throw WireError.configuration }
+                        self.ready = true
+                        self.armTimeout(100, token: token)
+                        self.pump(token)
                     case .text(let delta):
-                        guard configured else { throw WireError.invalidResponse }
-                        text += delta
-                        guard text.utf8.count <= 100_000 else { throw WireError.invalidResponse }
-                        onText(text)
-                    case .audio(let delta):
-                        guard configured, audio.count + delta.count <= WavePCM.maximumOutputBytes else {
+                        self.text += delta
+                        guard self.text.utf8.count <= 100_000 else { throw WireError.invalidResponse }
+                        self.onText?(self.text)
+                    case .audio(let pcm):
+                        guard self.audio.count + pcm.count <= WavePCM.maximumOutputBytes else {
                             throw WireError.invalidResponse
                         }
-                        audio.append(delta)
+                        self.audio.append(pcm)
+                        self.onAudio?(pcm)
                     case .closed:
-                        guard configured, closeRequested else { throw WireError.connection }
-                        await sender?.value
-                        try Task.checkCancellation()
-                        guard generation == token else { throw CancellationError() }
-                        if let sendError { throw sendError }
-                        guard sentBytes == frames.count * WavePCM.frameBytes else { throw WireError.sending }
-                        return TranslationReply(text: text, audio: audio.allSatisfy({ $0 == 0 }) ? Data() : try WavePCM.encode(audio))
+                        guard self.closeSent, self.sentBytes == self.receivedBytes else {
+                            throw WireError.sending
+                        }
+                        let wave = self.audio.isEmpty || self.audio.allSatisfy({ $0 == 0 })
+                            ? Data() : try WavePCM.encode(self.audio)
+                        self.complete(.success(TranslationReply(text: self.text, audio: wave)), token: token)
+                        return
                     case .failure(let error): throw error
                     case .other: break
                     }
                 }
-            } onCancel: {
-                // This closure owns only this request's socket; never cancel a newer run.
-                socket.cancel(with: .goingAway, reason: nil)
+            } catch {
+                guard self.generation == token else { return }
+                self.complete(.failure(error is WireError ? error : WireError.connection), token: token)
             }
-        } catch {
-            if Task.isCancelled || generation != token { throw CancellationError() }
-            if timedOut { throw WireError.timedOut }
-            if sendError is CancellationError { throw CancellationError() }
-            if sendError != nil { throw WireError.sending }
-            if let known = error as? WireError { throw known }
-            throw WireError.connection
         }
+    }
+
+    /// Frames must be exactly 200 ms of PCM16 mono/24 kHz.
+    func append(_ pcm: Data) {
+        guard !inputEnded, pcm.count == WavePCM.frameBytes,
+              receivedBytes + pcm.count <= WavePCM.maximumInputBytes + WavePCM.frameBytes else { return }
+        frames.append(pcm)
+        receivedBytes += pcm.count
+        pump(generation)
+    }
+
+    func finishInput() {
+        guard !inputEnded else { return }
+        inputEnded = true
+        pump(generation)
+    }
+
+    private func pump(_ token: UUID) {
+        guard ready, sender == nil, let socket = currentSocket,
+              !closeSent, generation == token else { return }
+        sender = Task { [weak self] in
+            guard let self else { return }
+            do {
+                while !Task.isCancelled, self.generation == token {
+                    if !self.frames.isEmpty {
+                        let frame = self.frames.removeFirst()
+                        try await socket.send(.string(try TranslationWire.append(frame)))
+                        guard self.generation == token else { return }
+                        self.sentBytes += frame.count
+                        self.onProgress?(self.sentBytes)
+                    } else if self.inputEnded {
+                        self.closeSent = true
+                        try await socket.send(.string("{\"type\":\"session.close\"}"))
+                        guard self.generation == token else { return }
+                        self.armTimeout(35, token: token)
+                        self.onWaiting?()
+                        break
+                    } else {
+                        break
+                    }
+                }
+                if self.generation == token {
+                    self.sender = nil
+                    if !self.frames.isEmpty || (self.inputEnded && !self.closeSent) {
+                        self.pump(token)
+                    }
+                }
+            } catch {
+                guard self.generation == token else { return }
+                self.complete(.failure(WireError.sending), token: token)
+            }
+        }
+    }
+
+    private func armTimeout(_ seconds: Double, token: UUID) {
+        watchdog?.cancel()
+        watchdog = Task { [weak self] in
+            do { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
+            catch { return }
+            guard let self, self.generation == token else { return }
+            self.complete(.failure(WireError.timedOut), token: token)
+        }
+    }
+
+    private func complete(_ result: Result<TranslationReply, Error>, token: UUID) {
+        guard generation == token else { return }
+        let callback = onFinished
+        cancel()
+        callback?(result)
     }
 }
