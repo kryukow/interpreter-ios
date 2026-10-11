@@ -83,7 +83,7 @@ enum WavePCM {
         return wav
     }
 
-    /// The last frame stays short: no synthetic samples are appended.
+    /// Match the PC control: pad only the final transport frame with zero samples.
     static func frames(_ pcm: Data) throws -> [Data] {
         guard !pcm.isEmpty, pcm.count % 2 == 0, pcm.count <= maximumInputBytes else {
             throw WireError.unsupportedRecording
@@ -91,7 +91,9 @@ enum WavePCM {
         return stride(from: 0, to: pcm.count, by: frameBytes).map { start in
             let lower = pcm.index(pcm.startIndex, offsetBy: start)
             let upper = pcm.index(pcm.startIndex, offsetBy: min(start + frameBytes, pcm.count))
-            return Data(pcm[lower..<upper])
+            var frame = Data(pcm[lower..<upper])
+            frame.append(Data(repeating: 0, count: frameBytes - frame.count))
+            return frame
         }
     }
 

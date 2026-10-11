@@ -92,7 +92,7 @@ struct TranslationReply {
                         armTimeout(Double(pcm.count) / Double(WavePCM.bytesPerSecond) + 40)
                         sender = Task { @MainActor in
                             do {
-                                for (index, frame) in frames.enumerated() {
+                                for frame in frames {
                                     try Task.checkCancellation()
                                     guard self.generation == token else { throw CancellationError() }
                                     try await socket.send(.string(try TranslationWire.append(frame)))
@@ -101,9 +101,7 @@ struct TranslationReply {
                                     sentBytes += frame.count
                                     onProgress(sentBytes)
                                     // Preserve source time rather than dumping a whole phrase at once.
-                                    if index < frames.count - 1 {
-                                        try await Task.sleep(nanoseconds: 200_000_000)
-                                    }
+                                    try await Task.sleep(nanoseconds: 200_000_000)
                                 }
                                 try Task.checkCancellation()
                                 guard self.generation == token else { throw CancellationError() }
@@ -134,8 +132,8 @@ struct TranslationReply {
                         try Task.checkCancellation()
                         guard generation == token else { throw CancellationError() }
                         if let sendError { throw sendError }
-                        guard sentBytes == pcm.count else { throw WireError.sending }
-                        return TranslationReply(text: text, audio: audio.isEmpty ? Data() : try WavePCM.encode(audio))
+                        guard sentBytes == frames.count * WavePCM.frameBytes else { throw WireError.sending }
+                        return TranslationReply(text: text, audio: audio.allSatisfy({ $0 == 0 }) ? Data() : try WavePCM.encode(audio))
                     case .failure(let error): throw error
                     case .other: break
                     }

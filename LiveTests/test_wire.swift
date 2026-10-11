@@ -12,12 +12,12 @@ import Foundation
         let wav = try WavePCM.encode(pcm)
         expect(try WavePCM.decode(wav) == pcm, "WAV round trip changed samples")
         let frames = try WavePCM.frames(pcm)
-        expect(frames.map(\.count) == [9_600, 9_600, 2], "Short final frame padded or lost")
-        expect(frames.reduce(into: Data()) { $0.append($1) } == pcm, "Frame ordering or samples changed")
+        expect(frames.map(\.count) == [9_600, 9_600, 9_600], "Final frame must match PC padding")
+        expect(frames.reduce(into: Data()) { $0.append($1) } == pcm + Data(repeating: 0, count: 9598), "Frame ordering or samples changed")
         let exact = try WavePCM.frames(Data(pcm.prefix(19_200)))
         expect(exact.map(\.count) == [9_600, 9_600], "Exact boundary produced extra frame")
         let backing = Data(repeating: 11, count: 2) + pcm
-        expect(try WavePCM.frames(backing.dropFirst(2)).reduce(into: Data()) { $0.append($1) } == pcm,
+        expect(try WavePCM.frames(backing.dropFirst(2)).reduce(into: Data()) { $0.append($1) } == pcm + Data(repeating: 0, count: 9598),
                "Non-zero Data indices corrupted frames")
         rejected({ _ = try WavePCM.frames(Data([1])) }, "Odd PCM accepted")
         rejected({ _ = try WavePCM.frames(Data()) }, "Empty PCM accepted")

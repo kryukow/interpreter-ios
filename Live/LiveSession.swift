@@ -1,6 +1,7 @@
 import SwiftUI
 import AVFoundation
 import UIKit
+import CryptoKit
 
 @MainActor final class LiveSession: NSObject, ObservableObject, AVAudioPlayerDelegate {
     enum Phase { case idle, arming, recording, connecting, sending, waiting, playing }
@@ -91,6 +92,7 @@ import UIKit
             recordedWave = try WavePCM.encode(pcm)
             elapsed = Double(pcm.count) / 48000
             details = String(format: "Записано %.1f с · без обработки", elapsed)
+            details += "\nЗапись " + String(SHA256.hash(data: pcm).map { String(format: "%02x", $0) }.joined().prefix(12))
             guard pcm.count >= 4800 else { phase = .idle; message = "Запись слишком короткая"; return }
             phase = .connecting; message = "Микрофон выключен · подключаю перевод"
             let token = generation
@@ -120,7 +122,7 @@ import UIKit
                     self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
                     self.phase = .idle
                     self.details += "\n" + (language == "ru" ? "Русский → Deutsch" : "Deutsch → Русский") + " · ответ завершён"
-                    if !reply.audio.isEmpty { self.play(reply.audio, source: false) }
+                    if !reply.audio.isEmpty && !reply.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { self.play(reply.audio, source: false) }
                     else { self.message = reply.text.isEmpty ? "Модель не вернула перевод. Запись можно проверить бесплатно." : "Получен текст перевода, без звука" }
                 } catch {
                     guard self.generation == token else { return }
@@ -155,7 +157,7 @@ import UIKit
             guard player.prepareToPlay() else { throw CocoaError(.fileReadCorruptFile) }
             self.player = player; player.delegate = self; player.volume = 1
             guard player.play() else { throw CocoaError(.fileReadCorruptFile) }
-            phase = .playing; message = source ? "Звучит твоя запись · бесплатно" : "Звучит перевод · бесплатно"
+            phase = .playing; message = source ? "Звучит твоя запись · бесплатно" : (text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Исходный звук ответа · перевод не подтверждён" : "Звучит перевод · бесплатно")
             playWatch = Task { [weak self, weak player] in
                 try? await Task.sleep(nanoseconds: UInt64((player?.duration ?? 0) + 5) * 1_000_000_000)
                 guard !Task.isCancelled, let self, let player, self.player === player else { return }

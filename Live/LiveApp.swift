@@ -69,7 +69,7 @@ struct LiveView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if !model.details.isEmpty { Text(model.details).font(.caption).foregroundStyle(.secondary) }
                     if model.translatedWave != nil {
-                        Button("Прослушать снова · бесплатно") { model.replay() }.disabled(model.busy)
+                        Button(model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Проверить звук ответа · бесплатно" : "Прослушать снова · бесплатно") { model.replay() }.disabled(model.busy)
                     }
                     if let wave = model.recordedWave {
                         Button("Послушать свою запись · бесплатно") { model.review() }.disabled(model.busy)
