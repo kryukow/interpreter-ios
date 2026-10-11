@@ -5,6 +5,30 @@ import CryptoKit
 
 @MainActor final class LiveSession: NSObject, ObservableObject, AVAudioPlayerDelegate {
     enum Phase { case idle, arming, recording, connecting, sending, waiting, playing }
+    enum KeyStatus {
+        case missing, unverified, accepted, rejected
+        var title: String {
+            switch self {
+            case .missing: return "Добавь API-ключ OpenAI"
+            case .unverified: return "Ключ сохранён · не проверен"
+            case .accepted: return "Ключ принят"
+            case .rejected: return "Ключ отклонён OpenAI"
+            }
+        }
+        var symbol: String {
+            switch self {
+            case .missing: return "key"
+            case .unverified: return "key.fill"
+            case .accepted: return "checkmark.seal.fill"
+            case .rejected: return "xmark.shield.fill"
+            }
+        }
+    }
+    private static let verifiedFingerprintKey = "live.apiKeyVerifiedFingerprint"
+    private static let rejectedFingerprintKey = "live.apiKeyRejectedFingerprint"
+    private static func keyFingerprint(_ key: String) -> String {
+        SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
     @Published private(set) var phase = Phase.idle
     @Published private(set) var held: String?
     @Published private(set) var message = "Удерживай кнопку нужного языка"
@@ -15,7 +39,8 @@ import CryptoKit
     @Published private(set) var recordedWave: Data?
     @Published private(set) var translatedWave: Data?
     @Published private(set) var keySaved = false
-    @Published private(set) var keyVerified = false
+    @Published private(set) var keyStatus: KeyStatus = .missing
+    var keyVerified: Bool { if case .accepted = keyStatus { return true }; return false }
     @Published private(set) var shareURL: URL?
     @Published private(set) var spent = UserDefaults.standard.double(forKey: "live.spent")
     @Published private(set) var credit: Double? = UserDefaults.standard.object(forKey: "live.credit") as? Double
@@ -40,9 +65,45 @@ import CryptoKit
         super.init()
         refreshKey()
     }
-    func refreshKey() { keySaved = (try? LiveKey.read()) != nil }
-    func saveKey(_ value: String) throws { try LiveKey.save(value); keyVerified = false; refreshKey() }
-    func removeKey() throws { try LiveKey.remove(); keyVerified = false; refreshKey() }
+    func refreshKey() {
+        guard let key = try? LiveKey.read() else {
+            keySaved = false; keyStatus = .missing
+            return
+        }
+        keySaved = true
+        let fingerprint = Self.keyFingerprint(key)
+        if UserDefaults.standard.string(forKey: Self.rejectedFingerprintKey) == fingerprint {
+            keyStatus = .rejected
+        } else if UserDefaults.standard.string(forKey: Self.verifiedFingerprintKey) == fingerprint {
+            keyStatus = .accepted
+        } else {
+            keyStatus = .unverified
+        }
+    }
+    func saveKey(_ value: String) throws {
+        try LiveKey.save(value)
+        UserDefaults.standard.removeObject(forKey: Self.verifiedFingerprintKey)
+        UserDefaults.standard.removeObject(forKey: Self.rejectedFingerprintKey)
+        refreshKey()
+    }
+    func removeKey() throws {
+        try LiveKey.remove()
+        UserDefaults.standard.removeObject(forKey: Self.verifiedFingerprintKey)
+        UserDefaults.standard.removeObject(forKey: Self.rejectedFingerprintKey)
+        refreshKey()
+    }
+    private func markKeyAccepted() {
+        guard let key = try? LiveKey.read() else { return }
+        UserDefaults.standard.set(Self.keyFingerprint(key), forKey: Self.verifiedFingerprintKey)
+        UserDefaults.standard.removeObject(forKey: Self.rejectedFingerprintKey)
+        keyStatus = .accepted
+    }
+    private func markKeyRejected() {
+        guard let key = try? LiveKey.read() else { return }
+        UserDefaults.standard.set(Self.keyFingerprint(key), forKey: Self.rejectedFingerprintKey)
+        UserDefaults.standard.removeObject(forKey: Self.verifiedFingerprintKey)
+        keyStatus = .rejected
+    }
     func setBalance(_ value: String) -> Bool {
         guard let amount = Double(value.replacingOccurrences(of: ",", with: ".")), amount.isFinite,
               amount >= 0, amount <= 1_000_000 else { return false }
@@ -140,7 +201,7 @@ import CryptoKit
                         case .success(let reply):
                             self.text = reply.text
                             self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
-                            self.keyVerified = true
+                            self.markKeyAccepted()
                             self.makeShareFile(for: reply.audio)
                             self.livePlayer?.confirmTranscript(reply.text)
                             self.details += "\n" + (language == "ru" ? "Русский → \(PartnerLanguage.current(partner).name)" : "\(PartnerLanguage.current(partner).name) → Русский") + " · ответ завершён"
@@ -154,8 +215,8 @@ import CryptoKit
                                     : (reply.audio.isEmpty ? "Получен только текст перевода" : "Готово · удерживай кнопку языка")
                             }
                         case .failure(let error):
-                            if let wireError = error as? WireError, case .authorization = wireError {
-                                self.keyVerified = false
+                            if let wireError = error as? WireError, case .invalidAPIKey = wireError {
+                                self.markKeyRejected()
                             }
                             self.recorder.cancel()
                             self.livePlayer?.stop()
@@ -293,7 +354,7 @@ import CryptoKit
                     guard let self, self.generation == token else { return }
                     switch result {
                     case .success(let reply):
-                        self.keyVerified = true
+                        self.markKeyAccepted()
                         self.text = reply.text
                         self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
                         self.makeShareFile(for: reply.audio)
@@ -306,8 +367,8 @@ import CryptoKit
                                 : "Готово · удерживай кнопку языка"
                         }
                     case .failure(let error):
-                        if let wireError = error as? WireError, case .authorization = wireError {
-                            self.keyVerified = false
+                        if let wireError = error as? WireError, case .invalidAPIKey = wireError {
+                            self.markKeyRejected()
                         }
                         self.livePlayer?.stop()
                         self.phase = .idle
