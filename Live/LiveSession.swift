@@ -154,7 +154,9 @@ import CryptoKit
                                     : (reply.audio.isEmpty ? "Получен только текст перевода" : "Готово · удерживай кнопку языка")
                             }
                         case .failure(let error):
-                            if (error as? WireError) == .authorization { self.keyVerified = false }
+                            if let wireError = error as? WireError, case .authorization = wireError {
+                                self.keyVerified = false
+                            }
                             self.recorder.cancel()
                             self.livePlayer?.stop()
                             self.held = nil; self.phase = .idle
@@ -218,6 +220,131 @@ import CryptoKit
             }
         }
     }
+    /// Translate an externally supplied recording (e.g. a saved WhatsApp voice note).
+    /// The source language is the currently selected partner language and output is Russian.
+    func importAudio(_ url: URL, partner: String) async throws {
+        guard PartnerLanguage(rawValue: partner) != nil else { throw WireError.invalidLanguage }
+        guard !busy else { throw WireError.connection }
+        guard keySaved, let key = try LiveKey.read() else { throw WireError.authorization }
+
+        stopAll()
+        removeShareFile()
+        translatedWave = nil; recordedWave = nil; text = ""; details = ""
+        generation = UUID()
+        let token = generation
+        phase = .connecting
+        message = "Открываю аудиофайл · звук пока не отправляется"
+
+        let pcm: Data
+        do {
+            pcm = try await Task.detached(priority: .userInitiated) {
+                try ImportedAudio.read(url: url)
+            }.value
+        } catch {
+            if generation == token { phase = .idle; message = "Не удалось открыть аудиофайл" }
+            throw error
+        }
+        guard generation == token else { throw CancellationError() }
+        recordedWave = try WavePCM.encode(pcm)
+        elapsed = Double(pcm.count) / 48_000
+        details = String(format: "Аудиофайл · %.1f с · \(PartnerLanguage.current(partner).name) → Русский", elapsed)
+
+        let stream = LiveStreamPlayer()
+        stream.onStart = { [weak self] in
+            guard let self, self.generation == token else { return }
+            self.phase = .playing
+            self.message = "Звучит перевод аудиофайла"
+        }
+        stream.onEnd = { [weak self] in
+            guard let self, self.generation == token else { return }
+            self.phase = .idle
+            self.message = "Готово · удерживай кнопку языка"
+        }
+        livePlayer = stream
+        stream.microphoneReleased()
+
+        var submitted = 0
+        do {
+            try connection.start(key: key, target: "ru",
+                onText: { [weak self] value in
+                    guard let self, self.generation == token else { return }
+                    self.text = value
+                    self.livePlayer?.confirmTranscript(value)
+                }, onAudio: { [weak self] delta in
+                    guard let self, self.generation == token else { return }
+                    self.livePlayer?.append(delta)
+                }, onProgress: { [weak self] count in
+                    guard let self, self.generation == token else { return }
+                    let added = max(0, count - submitted)
+                    submitted = count
+                    self.spent += Double(added) / 48_000 / 60 * 0.034
+                    UserDefaults.standard.set(self.spent, forKey: "live.spent")
+                    if self.phase == .connecting || self.phase == .sending {
+                        self.message = String(format: "Перевод аудиофайла · %.1f / %.1f с",
+                                              Double(count) / 48_000, self.elapsed)
+                    }
+                }, onWaiting: { [weak self] in
+                    guard let self, self.generation == token else { return }
+                    if self.phase != .playing {
+                        self.phase = .waiting
+                        self.message = "Ожидаю завершения перевода аудиофайла"
+                    }
+                }, onFinished: { [weak self] result in
+                    guard let self, self.generation == token else { return }
+                    switch result {
+                    case .success(let reply):
+                        self.keyVerified = true
+                        self.text = reply.text
+                        self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
+                        self.makeShareFile(for: reply.audio)
+                        self.livePlayer?.confirmTranscript(reply.text)
+                        self.details += " · ответ завершён"
+                        self.livePlayer?.complete()
+                        if self.livePlayer?.isPlaying != true {
+                            self.phase = .idle
+                            self.message = reply.audio.isEmpty ? "Получен текст перевода без звука"
+                                : "Готово · удерживай кнопку языка"
+                        }
+                    case .failure(let error):
+                        if let wireError = error as? WireError, case .authorization = wireError {
+                            self.keyVerified = false
+                        }
+                        self.livePlayer?.stop()
+                        self.phase = .idle
+                        self.message = (error as? LocalizedError)?.errorDescription
+                            ?? "Не удалось перевести аудиофайл"
+                    }
+                })
+        } catch {
+            livePlayer?.stop(); phase = .idle
+            throw error
+        }
+
+        phase = .sending
+        message = "Передаю аудиофайл на перевод"
+        operation = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let frames = try WavePCM.frames(pcm)
+                for frame in frames {
+                    try Task.checkCancellation()
+                    guard self.generation == token else { return }
+                    self.connection.append(frame)
+                    // The realtime endpoint expects chronological audio frames.
+                    try await Task.sleep(nanoseconds: 200_000_000)
+                }
+                guard self.generation == token else { return }
+                self.connection.finishInput()
+            } catch {
+                guard self.generation == token else { return }
+                self.connection.cancel()
+                self.livePlayer?.stop()
+                self.phase = .idle
+                self.message = "Передача аудиофайла отменена"
+            }
+        }
+    }
+
     func abortPress(_ language: String) {
         guard held == language else { return }
         stopAll(); message = "Запись отменена"
