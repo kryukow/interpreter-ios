@@ -90,6 +90,14 @@ import Foundation
         if case .text(let delta) = try TranslationWire.event(textEvent) {
             expect(delta == " Wort", "Transcript boundary changed")
         } else { fatalError("Text not parsed") }
+        let invalidKeyError = Data("{\"type\":\"error\",\"error\":{\"code\":\"invalid_api_key\"}}".utf8)
+        if case .failure(.invalidAPIKey) = try TranslationWire.event(invalidKeyError) {
+            // Explicitly rejected API credentials should show red.
+        } else { fatalError("Invalid API key response must be distinguished") }
+        let permissionError = Data("{\"type\":\"error\",\"error\":{\"code\":\"permission_denied\"}}".utf8)
+        if case .failure(.authorization) = try TranslationWire.event(permissionError) {
+            // A permissions error does not prove the secret was incorrect.
+        } else { fatalError("Missing model permission must not mark key invalid") }
         print("Fresh translation wire tests passed")
     }
 }
