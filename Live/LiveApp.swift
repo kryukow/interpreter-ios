@@ -20,6 +20,8 @@ struct LiveView: View {
     @State private var exportError = false
     @AppStorage("live.keepAwake") private var keepAwake = true
     @AppStorage("live.partnerLanguage") private var partnerCode = "de"
+    @State private var showLanguageWheel = false
+    @State private var wheelSelection = "de"
     @Environment(\.scenePhase) private var scenePhase
     private var partner: PartnerLanguage { PartnerLanguage.current(partnerCode) }
     var body: some View {
@@ -27,26 +29,17 @@ struct LiveView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("INTERPRETER LIVE").font(.caption2).tracking(3).foregroundStyle(.secondary)
-                    Menu {
-                        ForEach(PartnerLanguage.allCases) { choice in
-                            Button {
-                                guard model.phase == .idle else { return }
-                                partnerCode = choice.rawValue
-                            } label: {
-                                if partner == choice {
-                                    Label(choice.flag + " Русский ↔ " + choice.name, systemImage: "checkmark")
-                                } else {
-                                    Text(choice.flag + " Русский ↔ " + choice.name)
-                                }
-                            }
-                        }
+                    Button {
+                        guard model.phase == .idle else { return }
+                        wheelSelection = partnerCode
+                        showLanguageWheel = true
                     } label: {
                         HStack(spacing: 8) {
                             Text("Русский ↔ \(partner.name)")
                                 .font(.title2.bold())
                                 .lineLimit(1)
                                 .minimumScaleFactor(0.8)
-                            Image(systemName: "chevron.down")
+                            Image(systemName: "chevron.up.chevron.down")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
@@ -110,6 +103,47 @@ struct LiveView: View {
         }.padding(.horizontal, 24).padding(.vertical, 12)
         .background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
+        .sheet(isPresented: $showLanguageWheel) {
+            VStack(spacing: 0) {
+                HStack {
+                    Spacer()
+                    Button {
+                        showLanguageWheel = false
+                    } label: {
+                        Image(systemName: "checkmark")
+                            .font(.headline.weight(.bold))
+                            .frame(width: 42, height: 42)
+                            .background(.white.opacity(0.12), in: Circle())
+                    }
+                    .accessibilityLabel("Готово")
+                }
+                .padding(.horizontal, 22)
+                .padding(.top, 12)
+
+                Picker("Язык", selection: $wheelSelection) {
+                    ForEach(PartnerLanguage.allCases) { choice in
+                        Text(choice.flag)
+                            .font(.system(size: 42))
+                            .tag(choice.rawValue)
+                            .accessibilityLabel(choice.name)
+                    }
+                }
+                .pickerStyle(.wheel)
+                .labelsHidden()
+                .frame(maxWidth: .infinity)
+                .frame(height: 182)
+                .clipped()
+                .sensoryFeedback(.selection, trigger: wheelSelection)
+                .onChange(of: wheelSelection) { _, newValue in
+                    if PartnerLanguage(rawValue: newValue) != nil { partnerCode = newValue }
+                }
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(.white)
+            .presentationDetents([.height(280)])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(Color(white: 0.075))
+        }
         .fileExporter(isPresented: $exporting, document: document, contentType: .wav,
                       defaultFilename: "Interpreter-Live-recording") { result in
             if case .failure(let error) = result,
