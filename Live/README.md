@@ -1,4 +1,4 @@
-# Interpreter Live 1.2.1 (5) — voice sharing, audio import and streamlined settings
+# Interpreter Live 1.2.2 (6) — voice sharing, audio import and streamlined settings
 
 The tappable header «Русский ↔ Deutsch ⇵» opens a compact native iPhone wheel picker.
 Only emoji flags appear in the wheel; swiping up or down changes the language
@@ -82,3 +82,14 @@ not account billing data. Preferences and PCM format text are shortened.
 
 Voice similarity may vary with the OpenAI model and is **not voice cloning**.
 The exported file uses the returned audio without further synthesis or re-translation.
+
+## API key indicator
+
+The API key status has three meaningful colours. Gray means saved but not yet
+verified with OpenAI, green means a previous successful translation confirmed
+that key, and red means the server explicitly returned `invalid_api_key`.
+Network failures, quota problems, and model permission errors do not wrongly
+mark the key as invalid. The last successful/rejected status persists after
+relaunch for the same key via its SHA-256 fingerprint (no raw key in defaults).
+Replacing or deleting the key clears the status. This does not revalidate
+revoked keys silently; the next actual translation refreshes the indicator.
