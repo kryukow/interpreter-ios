@@ -16,8 +16,10 @@ struct LiveView: View {
     @StateObject private var model = LiveSession()
     @State private var settings = false
     @State private var exporting = false
+    @State private var importing = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
+    @State private var importError: String?
     @AppStorage("live.keepAwake") private var keepAwake = true
     @AppStorage("live.partnerLanguage") private var partnerCode = "de"
     @State private var showLanguageWheel = false
@@ -84,15 +86,28 @@ struct LiveView: View {
                     Text(model.text.isEmpty ? "—" : model.text).textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if !model.details.isEmpty { Text(model.details).font(.caption).foregroundStyle(.secondary) }
-                    if model.translatedWave != nil {
-                        Button(model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Проверить звук ответа · бесплатно" : "Прослушать снова · бесплатно") { model.replay() }.disabled(model.busy)
-                    }
-                    if let wave = model.recordedWave {
-                        Button("Послушать свою запись · бесплатно") { model.review() }.disabled(model.busy)
-                        Button("Сохранить WAV") {
-                            document = RecordingDocument(data: wave); exporting = true
+                    if let translation = model.translatedWave {
+                        Button("Прослушать снова") { model.replay() }.disabled(model.busy)
+                        Button("Сохранить перевод") {
+                            document = RecordingDocument(data: translation)
+                            exporting = true
                         }.disabled(model.busy)
+                        if let url = model.shareURL {
+                            ShareLink(item: url, preview: SharePreview("Голосовой перевод")) {
+                                Label("Отправить перевод", systemImage: "square.and.arrow.up")
+                            }
+                            .disabled(model.busy)
+                        }
                     }
+                    if model.recordedWave != nil {
+                        Button("Послушать свою запись") { model.review() }.disabled(model.busy)
+                    }
+                    Button {
+                        importing = true
+                    } label: {
+                        Label("Импорт аудио", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(model.busy)
                     if model.recordedWave == nil {
                         Text("Онлайн-перевод начинается во время удержания кнопки. После отпускания ждём только оставшуюся часть ответа. Звук микрофона записывается без усиления.")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -144,13 +159,34 @@ struct LiveView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(Color(white: 0.075))
         }
+        .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .wav]) { result in
+            switch result {
+            case .success(let url):
+                Task { @MainActor in
+                    do { try await model.importAudio(url, partner: partner.rawValue) }
+                    catch { importError = error.localizedDescription }
+                }
+            case .failure(let error):
+                if (error as NSError).code != NSUserCancelledError {
+                    importError = error.localizedDescription
+                }
+            }
+        }
         .fileExporter(isPresented: $exporting, document: document, contentType: .wav,
-                      defaultFilename: "Interpreter-Live-recording") { result in
+                      defaultFilename: "Interpreter-Live-translation") { result in
             if case .failure(let error) = result,
                (error as NSError).code != NSUserCancelledError { exportError = true }
             document = nil
         }
-        .alert("Не удалось сохранить WAV", isPresented: $exportError) { Button("Готово", role: .cancel) {} }
+        .alert("Не удалось сохранить перевод", isPresented: $exportError) { Button("Готово", role: .cancel) {} }
+        .alert("Импорт аудио", isPresented: Binding(
+            get: { importError != nil },
+            set: { if !$0 { importError = nil } }
+        )) {
+            Button("Понятно", role: .cancel) { importError = nil }
+        } message: {
+            Text(importError ?? "")
+        }
         .onAppear { updateAwake() }
         .onDisappear { UIApplication.shared.isIdleTimerDisabled = false; model.background() }
         .onChange(of: keepAwake) { _, _ in updateAwake() }
@@ -196,10 +232,18 @@ struct LiveSettings: View {
             Form {
                 Section("Голосовой перевод") {
                     Text("gpt-realtime-translate")
-                    Text("Отдельное приложение для платной модели OpenAI. Подписка ChatGPT и голоса iPhone здесь не используются.").font(.footnote)
+                    Text("Отдельная платная модель OpenAI для голосового перевода.").font(.footnote)
                 }
                 Section("API-ключ") {
-                    Text(model.keySaved ? "Ключ сохранён на этом iPhone" : "Добавь API-ключ OpenAI").font(.footnote)
+                    HStack {
+                        Image(systemName: model.keyVerified ? "checkmark.seal.fill" :
+                              model.keySaved ? "key.fill" : "key")
+                            .foregroundStyle(model.keyVerified ? Color.green : Color.secondary)
+                        Text(model.keyVerified ? "Ключ принят" :
+                             model.keySaved ? "Ключ сохранён · не проверен" : "Добавь API-ключ OpenAI")
+                            .foregroundStyle(model.keyVerified ? Color.green : Color.primary)
+                    }
+                    .font(.footnote)
                     SecureField("Вставь API-ключ", text: $key)
                         .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Вставить из буфера") { key = UIPasteboard.general.string ?? "" }
@@ -212,18 +256,27 @@ struct LiveSettings: View {
                     Text("Ключ хранится в защищённом хранилище iPhone. Старый ключ автоматически не переносится.").font(.footnote)
                 }
                 Section("Баланс API") {
-                    TextField("Текущий баланс в долларах", text: $balance).keyboardType(.decimalPad)
+                    HStack {
+                        Text("Указанный остаток")
+                        Spacer()
+                        Text(model.enteredBalanceText).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Сейчас · приблизительно")
+                        Spacer()
+                        Text(model.remainder).monospacedDigit().bold()
+                    }
+                    TextField("Обновить остаток, $", text: $balance).keyboardType(.decimalPad)
                     Button("Указать остаток") {
                         notice = model.setBalance(balance) ? "Остаток обновлён" : "Введи сумму, например 9,80"
                         balance = ""
                     }
                     Link("Баланс и расходы OpenAI", destination: URL(string: "https://platform.openai.com/settings/organization/billing/overview")!)
-                    Text("Счётчик приблизительный: $0,034 за минуту отправленного аудио. Он учитывает только это новое приложение. Фактический баланс — на сайте OpenAI. Повторное прослушивание бесплатно.").font(.footnote)
+                    Text("≈ $0,034 за минуту отправленного аудио.").font(.footnote)
                 }
-                Section("Экран") { Toggle("Не гасить экран", isOn: $keepAwake) }
-                Section("Запись") {
-                    Text("Микрофон iPhone: WAV/PCM 24 кГц, моно, до 60 секунд. Каждые 200 мс звук передаётся OpenAI во время разговора. После отпускания отправляется только остаток, затем включается озвучивание перевода.").font(.footnote)
-                    Text("Последняя запись и ответ находятся только в памяти. WAV сохраняется в «Файлы» по твоей кнопке. При уходе из приложения запись, соединение и плеер останавливаются.").font(.footnote)
+                Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
+                Section("Формат передачи аудио") {
+                    Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)
                 }
                 if !notice.isEmpty { Section { Text(notice).font(.footnote) } }
                 Section { Text(liveVersion).foregroundStyle(.secondary) }
