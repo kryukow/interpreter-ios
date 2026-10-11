@@ -19,26 +19,45 @@ struct LiveView: View {
     @State private var document: RecordingDocument?
     @State private var exportError = false
     @AppStorage("live.keepAwake") private var keepAwake = true
+    @AppStorage("live.partnerLanguage") private var partnerCode = "de"
     @Environment(\.scenePhase) private var scenePhase
+    private var partner: PartnerLanguage { PartnerLanguage.current(partnerCode) }
     var body: some View {
         VStack(spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("INTERPRETER LIVE").font(.caption2).tracking(3).foregroundStyle(.secondary)
-                    Text("Русский ↔ Deutsch").font(.title2.bold())
+                    Text("Русский ↔ \(partner.name)").font(.title2.bold())
                 }
                 Spacer()
                 Button { model.stopAll(); settings = true } label: {
                     Image(systemName: "gearshape.fill").font(.title2)
                 }.disabled(model.busy).accessibilityLabel("Настройки")
             }
-            Image(systemName: "infinity").font(.system(size: 52, weight: .light))
-            HStack(spacing: 4) {
-                ForEach(0..<40, id: \.self) { index in
-                    Capsule().fill(.white.opacity(0.85))
-                        .frame(width: 3, height: model.phase == .recording ? max(3, model.levels[index] * 42) : 3)
+            HStack(spacing: 6) {
+                ForEach(PartnerLanguage.allCases) { choice in
+                    Button {
+                        guard model.phase == .idle else { return }
+                        partnerCode = choice.rawValue
+                    } label: {
+                        HStack(spacing: 4) {
+                            Text(choice.flag)
+                            Text(choice.name).lineLimit(1).minimumScaleFactor(0.75)
+                        }
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .foregroundStyle(partner == choice ? Color.black : Color.white)
+                        .background(partner == choice ? Color.white : Color(white: 0.14),
+                                    in: RoundedRectangle(cornerRadius: 12))
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(model.phase != .idle)
+                    .accessibilityLabel("Выбрать язык \(choice.name)")
                 }
-            }.frame(height: 44).accessibilityHidden(true)
+            }
+            Image(systemName: "infinity").font(.system(size: 52, weight: .light))
+            MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
             VStack(spacing: 5) {
                 Text(model.message).font(.headline).multilineTextAlignment(.center)
                 if model.phase == .recording {
@@ -57,8 +76,8 @@ struct LiveView: View {
                 }
             }.padding(16).background(Color(white: 0.07), in: RoundedRectangle(cornerRadius: 22))
             HStack(spacing: 16) {
-                talk("Русский", language: "ru", target: "→ DEUTSCH")
-                talk("Deutsch", language: "de", target: "→ РУССКИЙ")
+                talk("Русский", language: "ru", target: "→ \(partner.uppercaseName)")
+                talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
             }.frame(height: 145)
             Text("Держи → вибросигнал → говори → отпусти")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
@@ -105,7 +124,7 @@ struct LiveView: View {
     private func talk(_ title: String, language: String, target: String) -> some View {
         PressButton(title: title, subtitle: target, pressed: model.held == language,
                     enabled: !model.busy || model.held == language,
-                    begin: { model.begin(language) }, end: { model.end(language) },
+                    begin: { model.begin(language, partner: partner.rawValue) }, end: { model.end(language) },
                     cancel: { model.abortPress(language) }).frame(maxWidth: .infinity)
     }
     private func updateAwake() {
