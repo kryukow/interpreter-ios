@@ -120,7 +120,7 @@ enum TranslationWire {
     }
 
     static func configuration(target: String) throws -> String {
-        guard target == "ru" || target == "de" else { throw WireError.invalidLanguage }
+        guard ["ru", "de", "ro", "en", "pl"].contains(target) else { throw WireError.invalidLanguage }
         return try json(["type": "session.update", "session": ["audio": [
             "input": ["noise_reduction": NSNull(), "transcription": NSNull()],
             "output": ["language": target]
