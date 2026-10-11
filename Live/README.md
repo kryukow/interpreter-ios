@@ -1,6 +1,10 @@
 # Interpreter Live 1.2.0 (4) — instant translation with four language pairs and a live waveform
 
-The tappable header «Русский ↔ Deutsch ⌄» opens a native compact menu to choose one of four partners:
+The tappable header «Русский ↔ Deutsch ⇵» opens a compact native iPhone wheel picker.
+Only emoji flags appear in the wheel; swiping up or down changes the language
+with iOS selection haptics. The header and directional buttons display the
+current language name; the selected partner persists after relaunch.
+The available partner flags are:
 Deutsch (de), Română (ro), English (en), Polski (pl).
 Russian remains the fixed opposite language. Two explicit push-to-talk
 buttons instantly point at the selected target: Russian → partner or
@@ -27,7 +31,8 @@ offline without another API request. Input noise reduction and extra
 transcription are disabled. No extra paid model calls or retries.
 
 The original dotted line becomes an active, symmetric, white waveform
-while recording. It uses microphone amplitude already calculated locally
+with the biggest voice-driven vibration in the centre, gently tapering
+towards both sides of the display while recording. It uses microphone amplitude already calculated locally
 by the recorder, with no audio modification, FFT, additional inference,
 or network traffic. Selecting languages and visualizing sound do not
 change the 200 ms transmission pipeline.
@@ -41,8 +46,14 @@ GitHub Actions builds simulator and iPhone unsigned IPA. It is not an
 on-device integration test: latency, audio route and spoken translation must
 be verified on iPhone before treating this version as production-ready.
 
-Device checks: verify the source and target for all eight directions, particularly
-Romanian and Polish pronunciation, names and short phrases. Verify that the
+IMPORTANT: The dedicated gpt-realtime-translate model currently only supports
+13 spoken OUTPUT languages including ru/de/en. Romanian and Polish are currently
+INPUT languages only. The ro/pl output directions in this draft remain blocked
+on adding a separate user-approved backend; do NOT publish or merge this draft
+as full four-language support based solely on CI success.
+
+Device checks: verify the supported directions, particularly
+names and short phrases. Verify that the
 waveform reacts to quiet/loud speech, remains still when not recording,
 and has no impact on the latency achieved by the previous release.
 The offline protocol tests and CI compile do not prove live API quality.
