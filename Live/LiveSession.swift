@@ -105,6 +105,14 @@ import CryptoKit
         UserDefaults.standard.removeObject(forKey: Self.verifiedFingerprintKey)
         keyStatus = .rejected
     }
+    /// Share the same API key state and approximate balance across both features.
+    func transcriptionKeyAccepted() { markKeyAccepted() }
+    func transcriptionKeyRejected() { markKeyRejected() }
+    func addTranscriptionEstimate(_ amount: Double) {
+        guard amount.isFinite, amount > 0 else { return }
+        spent += amount
+        UserDefaults.standard.set(spent, forKey: "live.spent")
+    }
     func setBalance(_ value: String) -> Bool {
         guard let amount = Double(value.replacingOccurrences(of: ",", with: ".")), amount.isFinite,
               amount >= 0, amount <= 1_000_000 else { return false }
