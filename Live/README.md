@@ -160,3 +160,24 @@ CI also checks that neither import entrypoint reintroduces SwiftUI's
 failing picker. This is still a **physical-device regression test**:
 verify that the modal closes and the chosen file appears, then verify
 duration, *before* approving a chargeable transcription.
+
+
+## Voice clone experiment (1.4.2 build 12; based on 1.4.1 build 11)
+
+This branch starts from `feature/waveform-language-picker-1011`, preserving the
+1.4.1 language switcher and Voice-to-Text screen. The opt-in voice clone test is
+under Settings → My Voice. The existing realtime translation and audio playback
+are unchanged.
+
+The `iliasaz/chatterbox-coreml` Swift package provides on-device Chatterbox
+Multilingual on iOS 18+. Large model weights are fetched from Hugging Face only
+after the user taps Download. Record 25–30 seconds or import clean speech,
+create on-device `my-voice-conds.safetensors`, enter Russian or German text,
+and export locally generated WAV. User voice samples are not uploaded for TTS.
+
+Research preview: CI proves compiler packaging only, not on-device speed,
+voice fidelity, GPU/ANE thermal stability, or recording behavior. Verify on
+an iPhone 16 Pro before enabling the voice in the translation pipeline.
+
+Sources: https://github.com/iliasaz/chatterbox-coreml and
+https://github.com/resemble-ai/chatterbox (MIT license).
