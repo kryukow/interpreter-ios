@@ -119,7 +119,7 @@ import Foundation
             expect(body.contains(mode.model), "Request used wrong transcription model")
             expect(body.contains(#"filename="example.m4a""#), "Multipart file missing")
             if mode == .group {
-                expect(body.contains("name=\\"language\\"") && body.contains("ru"),
+                expect(body.contains(#"name="language""#) && body.contains("ru"),
                        "Diarization language should be pinned to Russian by default")
                 expect(body.contains("diarized_json") && body.contains("chunking_strategy"),
                        "Speaker mode must request diarized JSON and automatic chunking")
@@ -146,7 +146,7 @@ import Foundation
             file: Data([1,2]), filename: "ru.m4a", key: "test",
             mode: .single, boundary: "H", hint: .ru)
         let ruBody = String(decoding: singleRU.httpBody ?? Data(), as: UTF8.self)
-        expect(ruBody.contains("languages[]") && !ruBody.contains("language\\""),
+        expect(ruBody.contains("languages[]") && !ruBody.contains(#"name="language""#),
                "gpt-transcribe must send the plural languages[]")
         let mixed = try TranscriptionWire.request(
             file: Data([1,2]), filename: "mixed.m4a", key: "test",
@@ -158,7 +158,7 @@ import Foundation
             file: Data([1,2]), filename: "mixed.m4a", key: "test",
             mode: .group, boundary: "H", hint: .ruEN)
         let groupBody = String(decoding: groupMix.httpBody ?? Data(), as: UTF8.self)
-        expect(!groupBody.contains("languages[]") && !groupBody.contains("name=\\"language\\""),
+        expect(!groupBody.contains("languages[]") && !groupBody.contains(#"name="language""#),
                "Diarization does not support bilingual hint lists")
         rejected({ _ = try TranscriptionWire.request(
             file: Data(repeating: 1, count: TranscriptionWire.maxBytes + 1),
