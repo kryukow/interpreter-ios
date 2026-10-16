@@ -90,7 +90,16 @@ enum TranscriptionWire {
         let safeName = filename.replacingOccurrences(of: "\"", with: "_")
             .replacingOccurrences(of: "\r", with: "_")
             .replacingOccurrences(of: "\n", with: "_")
-        let mimetype = safeName.lowercased().hasSuffix(".wav") ? "audio/wav" : "audio/mp4"
+        let mimetype: String
+        switch (safeName as NSString).pathExtension.lowercased() {
+        case "wav": mimetype = "audio/wav"
+        case "mp3", "mpga", "mpeg": mimetype = "audio/mpeg"
+        case "mp4", "m4a": mimetype = "audio/mp4"
+        case "ogg": mimetype = "audio/ogg"
+        case "webm": mimetype = "audio/webm"
+        case "flac": mimetype = "audio/flac"
+        default: mimetype = "application/octet-stream"
+        }
         body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(mimetype)\r\n\r\n".utf8))
         body.append(file)
         body.append(Data("\r\n--\(boundary)--\r\n".utf8))
