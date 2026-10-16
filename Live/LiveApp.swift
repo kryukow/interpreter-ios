@@ -131,44 +131,6 @@ struct LiveView: View {
                 }
                 .frame(height: 136)
 
-                if !model.text.isEmpty || !model.details.isEmpty ||
-                   model.recordedWave != nil || model.translatedWave != nil {
-                    VStack(alignment: .leading, spacing: 11) {
-                        if !model.text.isEmpty {
-                            Text(model.text).font(.subheadline)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                        if !model.details.isEmpty {
-                            Text(model.details).font(.caption).foregroundStyle(.secondary)
-                        }
-                        if model.translatedWave != nil {
-                            HStack {
-                                Button("Прослушать") { model.replay() }
-                                Button("Сохранить перевод") {
-                                    if let translated = model.translatedWave {
-                                        document = RecordingDocument(data: translated)
-                                        exporting = true
-                                    }
-                                }
-                                if let url = model.shareURL {
-                                    ShareLink(item: url) { Label("Отправить", systemImage: "square.and.arrow.up") }
-                                }
-                            }
-                            .font(.caption)
-                            .disabled(model.busy)
-                        }
-                        if model.recordedWave != nil {
-                            Button("Послушать свою запись") { model.review() }
-                                .font(.caption)
-                                .disabled(model.busy)
-                        }
-                    }
-                    .padding(14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 16))
-                }
-
                 Button { showTranscription = true } label: {
                     HStack(spacing: 13) {
                         Image(systemName: "waveform.badge.mic")
@@ -214,6 +176,45 @@ struct LiveView: View {
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
+
+                if !model.text.isEmpty || !model.details.isEmpty ||
+                   model.recordedWave != nil || model.translatedWave != nil {
+                    VStack(alignment: .leading, spacing: 11) {
+                        if !model.text.isEmpty {
+                            Text(model.text).font(.subheadline)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if !model.details.isEmpty {
+                            Text(model.details).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if model.translatedWave != nil {
+                            HStack {
+                                Button("Прослушать") { model.replay() }
+                                Button("Сохранить перевод") {
+                                    if let translated = model.translatedWave {
+                                        document = RecordingDocument(data: translated)
+                                        exporting = true
+                                    }
+                                }
+                                if let url = model.shareURL {
+                                    ShareLink(item: url) { Label("Отправить", systemImage: "square.and.arrow.up") }
+                                }
+                            }
+                            .font(.caption)
+                            .disabled(model.busy)
+                        }
+                        if model.recordedWave != nil {
+                            Button("Послушать свою запись") { model.review() }
+                                .font(.caption)
+                                .disabled(model.busy)
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 16))
+                }
+
             }
             .padding(.horizontal, 18)
             .padding(.bottom, 14)
