@@ -372,6 +372,7 @@ struct LiveSettings: View {
     @State private var balance = ""
     @State private var notice = ""
     @State private var deleteKey = false
+    @State private var showVoiceLab = false
     var body: some View {
         NavigationStack {
             Form {
@@ -418,6 +419,16 @@ struct LiveSettings: View {
                     Text("≈ $0,034 за минуту отправленного аудио.").font(.footnote)
                 }
                 Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
+                Section("Мой голос · эксперимент") {
+                    Button {
+                        model.stopAll()
+                        showVoiceLab = true
+                    } label: {
+                        Label("Создать и проверить свой голос", systemImage: "waveform.badge.mic")
+                    }
+                    Text("Бесплатная локальная модель Chatterbox: запись голоса, синтез на русском и немецком, сохранение WAV. Не влияет на обычный перевод.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section("Формат передачи аудио") {
                     Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)
                 }
@@ -430,6 +441,7 @@ struct LiveSettings: View {
                         do { try model.removeKey(); notice = "Ключ удалён" } catch { notice = error.localizedDescription }
                     }
                 }
+                .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView() }
                 .onDisappear { key = "" }
         }.tint(.white)
     }
