@@ -53,6 +53,8 @@ import Foundation
 
         expect(PartnerLanguage.allCases.map(\.rawValue) == ["de", "en", "es", "ro", "pl"],
                "Unexpected partner languages")
+        expect(PartnerLanguage.allCases.map(\.shortCode) == ["DE", "GB", "ES", "RO", "PL"],
+               "Infinity Switch must display approved text codes, never flags")
         expect(PartnerLanguage.current("unknown") == .de, "Unsupported saved language must fall back to German")
         for partner in PartnerLanguage.allCases {
             expect(partner.outputCode(whenSourceIsRussian: true) == partner.rawValue,
