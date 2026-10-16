@@ -44,6 +44,9 @@ import CryptoKit
     var keyStatusIsRejected: Bool { if case .rejected = keyStatus { return true }; return false }
     @Published private(set) var shareURL: URL?
     @Published private(set) var spent = UserDefaults.standard.double(forKey: "live.spent")
+    @Published private(set) var translationSpent = UserDefaults.standard.double(forKey: "live.translationSpentV2")
+    @Published private(set) var transcriptionSpent = UserDefaults.standard.double(forKey: "live.transcriptionSpentV2")
+    var lowBalance: Bool { if let credit { return credit - spent < 1 }; return false }
     @Published private(set) var credit: Double? = UserDefaults.standard.object(forKey: "live.credit") as? Double
     private let recorder = NativeRecorder()
     private let connection = TranslationConnection()
@@ -57,10 +60,8 @@ import CryptoKit
     var busy: Bool { phase != .idle && phase != .playing }
     var remainder: String { credit.map { String(format: "≈ $%.3f", max(0, $0 - spent)) } ?? "—" }
     var enteredBalanceText: String {
-        guard let total = credit else { return "—" }
-        let stored = UserDefaults.standard.object(forKey: "live.manualEnteredBalance") as? Double
-        let amount = stored ?? max(0, total - spent)
-        return String(format: "$%.3f", amount)
+        guard let credit else { return "—" }
+        return String(format: "$%.3f", max(0, credit - spent))
     }
     override init() {
         super.init()
@@ -108,17 +109,24 @@ import CryptoKit
     /// Share the same API key state and approximate balance across both features.
     func transcriptionKeyAccepted() { markKeyAccepted() }
     func transcriptionKeyRejected() { markKeyRejected() }
-    func addTranscriptionEstimate(_ amount: Double) {
+    /// Charge each successful part at most once, including after app restart.
+    /// Both live translation and transcripts subtract from the same stored total.
+    func addTranscriptionEstimate(_ amount: Double, id: String) {
         guard amount.isFinite, amount > 0 else { return }
+        var billed = Set(UserDefaults.standard.stringArray(forKey: "live.billedPartsV2") ?? [])
+        guard billed.insert(id).inserted else { return }
         spent += amount
+        transcriptionSpent += amount
         UserDefaults.standard.set(spent, forKey: "live.spent")
+        UserDefaults.standard.set(transcriptionSpent, forKey: "live.transcriptionSpentV2")
+        UserDefaults.standard.set(billed.sorted(), forKey: "live.billedPartsV2")
     }
     func setBalance(_ value: String) -> Bool {
         guard let amount = Double(value.replacingOccurrences(of: ",", with: ".")), amount.isFinite,
               amount >= 0, amount <= 1_000_000 else { return false }
         credit = amount + spent
         UserDefaults.standard.set(amount + spent, forKey: "live.credit")
-        UserDefaults.standard.set(amount, forKey: "live.manualEnteredBalance")
+        UserDefaults.standard.removeObject(forKey: "live.manualEnteredBalance")
         return true
     }
     func begin(_ language: String, partner: String) {
@@ -193,8 +201,11 @@ import CryptoKit
                         guard let self, self.generation == token else { return }
                         let added = max(0, count - submitted)
                         submitted = count
-                        self.spent += Double(added) / 48_000 / 60 * 0.034
+                        let charge = Double(added) / 48_000 / 60 * 0.034
+                        self.spent += charge
+                        self.translationSpent += charge
                         UserDefaults.standard.set(self.spent, forKey: "live.spent")
+                        UserDefaults.standard.set(self.translationSpent, forKey: "live.translationSpentV2")
                         if self.phase == .sending || self.phase == .connecting {
                             self.message = "Отправляю последние фрагменты · микрофон выключен"
                         }
