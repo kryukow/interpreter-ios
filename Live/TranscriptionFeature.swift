@@ -6,6 +6,7 @@ import UIKit
     enum Stage { case idle, preparing, ready, processing, complete }
 
     @Published var mode: TranscriptionMode = .single
+    @Published var languageHint: TranscriptionLanguageHint = .ru
     @Published private(set) var stage: Stage = .idle
     @Published private(set) var filename = ""
     @Published private(set) var duration: Double = 0
@@ -13,20 +14,63 @@ import UIKit
     @Published private(set) var transcript = ""
     @Published private(set) var detectedLanguages: [String] = []
     @Published private(set) var errorMessage: String?
+    @Published private(set) var finishedCount = 0
+    @Published private(set) var totalCount = 0
+    @Published private(set) var uncertainCount = 0
+
     private var prepared: PreparedTranscription?
+    private var saved: SavedTranscriptJob?
     private var task: Task<Void, Never>?
     private var requestID = UUID()
+    private var currentRequestIndex: Int?
+    private var restored = false
 
     var estimatedPrice: Double { mode.price(for: duration) }
+    var remainingPrice: Double {
+        guard let prepared, let saved else { return estimatedPrice }
+        return prepared.parts.enumerated()
+            .filter { saved.completed[$0.offset] == nil }
+            .reduce(0) { $0 + mode.price(for: $1.element.seconds) }
+    }
     var ready: Bool { stage == .ready && prepared != nil }
     var working: Bool { stage == .preparing || stage == .processing }
+    var hasIncomplete: Bool { finishedCount > 0 && finishedCount < totalCount }
+
+    func restore() {
+        guard !restored else { return }
+        restored = true
+        guard let (archive, selection) = TranscriptionArchive.read() else { return }
+        prepared = selection
+        saved = archive
+        mode = TranscriptionMode(rawValue: archive.mode) ?? .single
+        languageHint = TranscriptionLanguageHint(rawValue: archive.hint) ?? .ru
+        filename = archive.filename
+        duration = archive.duration
+        stage = archive.completed.count == selection.parts.count ? .complete : .ready
+        refreshTranscript()
+        progress = stage == .complete ? "Расшифровка готова и сохранена на iPhone" :
+            "Сохранено \(finishedCount) из \(totalCount) частей · можно продолжить"
+        if uncertainCount > 0 {
+            errorMessage = "У \(uncertainCount) запроса нет подтверждённого ответа. OpenAI мог списать за них средства; повтор запускается только вручную."
+        }
+    }
 
     func selectFile(_ url: URL) {
-        reset()
+        pause()
+        let previous = saved
+        prepared = nil
+        saved = nil
+        filename = url.lastPathComponent
+        duration = 0
+        finishedCount = 0
+        totalCount = 0
+        uncertainCount = 0
+        transcript = ""
+        detectedLanguages = []
+        errorMessage = nil
         let token = requestID
         stage = .preparing
-        filename = url.lastPathComponent
-        progress = "Файл выбран · проверяю запись и готовлю к обработке"
+        progress = "Файл выбран · сжимаю и сохраняю части на iPhone"
         task = Task {
             do {
                 let selection = try await TranscriptionAudio.prepare(url)
@@ -34,46 +78,61 @@ import UIKit
                     selection.cleanup()
                     return
                 }
+                var archive = TranscriptionArchive.make(selection, mode: mode, hint: languageHint)
+                do { try TranscriptionArchive.write(archive) }
+                catch { selection.cleanup(); throw error }
+                if let previous { TranscriptionArchive.removeAudioOnly(previous) }
                 prepared = selection
+                saved = archive
                 filename = selection.filename
                 duration = selection.duration
+                totalCount = selection.parts.count
                 stage = .ready
-                progress = selection.parts.count > 1
-                    ? "Запись будет обработана по частям: \(selection.parts.count)"
-                    : "Готово к расшифровке"
+                progress = "Подготовлено \(totalCount) частей · можно начать"
             } catch {
                 guard requestID == token else { return }
                 stage = .idle
-                progress = ""
                 errorMessage = error.localizedDescription
+                progress = "Не удалось подготовить запись"
             }
         }
     }
 
     func start(account: LiveSession) {
-        guard ready, let selection = prepared else { return }
+        guard ready, let selection = prepared, var archive = saved else { return }
         guard let key = try? LiveKey.read(), !key.isEmpty else {
             errorMessage = "Сначала добавь API-ключ в настройках."
             return
         }
+        // Never mix speaker/text mode or language settings between already paid parts.
+        guard archive.completed.isEmpty ||
+                (archive.mode == mode.rawValue && archive.hint == languageHint.rawValue) else {
+            errorMessage = "Для продолжения нужны прежние режим и язык записи."
+            return
+        }
+        archive.mode = mode.rawValue
+        archive.hint = languageHint.rawValue
+        do { try TranscriptionArchive.write(archive) }
+        catch { errorMessage = "Не удалось сохранить задание на iPhone: \(error.localizedDescription)"; return }
+        saved = archive
         let token = requestID
         let selectedMode = mode
+        let selectedHint = languageHint
         stage = .processing
-        transcript = ""
-        detectedLanguages = []
         errorMessage = nil
         task = Task {
-            var completedParts: [String] = []
             for (index, part) in selection.parts.enumerated() {
+                guard saved?.completed[index] == nil else { continue }
                 do {
                     try Task.checkCancellation()
                     guard requestID == token else { return }
-                    progress = "Расшифровываю часть \(index + 1) из \(selection.parts.count)"
+                    currentRequestIndex = index
+                    progress = "Расшифровываю \(index + 1) из \(selection.parts.count) · готово \(finishedCount)"
                     let data = try Data(contentsOf: part.url, options: .mappedIfSafe)
                     let boundary = "Interpreter" + UUID().uuidString.replacingOccurrences(of: "-", with: "")
                     let request = try TranscriptionWire.request(
-                        file: data, filename: part.url.lastPathComponent,
-                        key: key, mode: selectedMode, boundary: boundary
+                        file: data, filename: part.url.lastPathComponent, key: key,
+                        mode: selectedMode, boundary: boundary, hint: selectedHint
                     )
                     let (answerData, rawResponse) = try await URLSession.shared.data(for: request)
                     try Task.checkCancellation()
@@ -86,42 +145,86 @@ import UIKit
                     }
                     let answer = try TranscriptionWire.parse(answerData, mode: selectedMode)
                     account.transcriptionKeyAccepted()
-                    account.addTranscriptionEstimate(selectedMode.price(for: part.seconds))
-                    detectedLanguages = Array(Set(detectedLanguages + answer.languages)).sorted()
-                    completedParts.append(
-                        answer.formatted(mode: selectedMode,
-                                         partNumber: index + 1,
-                                         showPart: selection.parts.count > 1,
-                                         offsetSeconds: selection.parts.prefix(index)
-                                             .reduce(0) { $0 + $1.seconds })
+                    var next = saved ?? archive
+                    // Part identity is independent of retry count. Never charge a saved part twice.
+                    let formatted = answer.formatted(
+                        mode: selectedMode, partNumber: index + 1,
+                        showPart: selection.parts.count > 1,
+                        offsetSeconds: selection.parts.prefix(index).reduce(0) { $0 + $1.seconds }
                     )
-                    transcript = completedParts.joined(separator: "\n\n")
+                    next.completed[index] = formatted
+                    next.languages = Array(Set(next.languages + answer.languages)).sorted()
+                    next.unknownCharges.removeAll { $0 == index }
+                    try TranscriptionArchive.write(next)
+                    saved = next
+                    account.addTranscriptionEstimate(
+                        selectedMode.price(for: part.seconds),
+                        id: next.folderName + "/" + selectedMode.rawValue + "/" + String(index)
+                    )
+                    currentRequestIndex = nil
+                    refreshTranscript()
                 } catch is CancellationError {
                     return
                 } catch {
                     guard requestID == token else { return }
-                    if let error = error as? TranscriptWireError, case .invalidKey = error {
-                        account.transcriptionKeyRejected()
+                    if let wireError = error as? TranscriptWireError,
+                       case .invalidKey = wireError { account.transcriptionKeyRejected() }
+                    // A timeout/network interruption cannot establish whether the server billed.
+                    if let urlError = error as? URLError,
+                       [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(urlError.code) {
+                        markUnknown(index)
                     }
-                    errorMessage = error.localizedDescription
-                    stage = completedParts.isEmpty ? .ready : .complete
-                    progress = completedParts.isEmpty ? "Можно повторить попытку" :
-                        "Часть расшифровки получена. Остальные фрагменты не завершены."
+                    currentRequestIndex = nil
+                    stage = .ready
+                    errorMessage = (error as? URLError)?.code == .timedOut
+                        ? "Время ожидания истекло. Уже готовые части сохранены. Повтор следующей части может быть платным."
+                        : error.localizedDescription
+                    progress = "Готово \(finishedCount) из \(totalCount) · продолжение вручную"
                     return
                 }
             }
             guard requestID == token else { return }
+            currentRequestIndex = nil
             stage = .complete
-            progress = "Расшифровка готова"
+            progress = "Расшифровка готова · \(finishedCount) частей сохранено"
         }
     }
 
-    func reportError(_ message: String) { errorMessage = message }
-    func reset() {
+    private func refreshTranscript() {
+        guard let saved else { return }
+        totalCount = saved.partNames.count
+        finishedCount = saved.completed.count
+        uncertainCount = saved.unknownCharges.count
+        transcript = saved.completed.keys.sorted().compactMap { saved.completed[$0] }
+            .joined(separator: "\n\n")
+        detectedLanguages = saved.languages
+    }
+
+    private func markUnknown(_ index: Int) {
+        guard var archive = saved, archive.completed[index] == nil else { return }
+        if !archive.unknownCharges.contains(index) { archive.unknownCharges.append(index) }
+        try? TranscriptionArchive.write(archive)
+        saved = archive
+        refreshTranscript()
+    }
+
+    /// Leave persisted audio and completed results intact when dismissing the sheet.
+    func pause() {
+        if stage == .processing, let index = currentRequestIndex { markUnknown(index) }
         requestID = UUID()
         task?.cancel()
         task = nil
-        prepared?.cleanup()
+        currentRequestIndex = nil
+        if stage == .processing { stage = .ready }
+        if stage == .preparing { stage = .idle }
+    }
+
+    func reportError(_ message: String) { errorMessage = message }
+
+    func clearSaved() {
+        pause()
+        if let saved { TranscriptionArchive.remove(saved) }
+        saved = nil
         prepared = nil
         stage = .idle
         filename = ""
@@ -130,6 +233,9 @@ import UIKit
         transcript = ""
         detectedLanguages = []
         errorMessage = nil
+        finishedCount = 0
+        totalCount = 0
+        uncertainCount = 0
     }
 }
 
