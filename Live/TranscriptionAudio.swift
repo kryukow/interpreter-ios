@@ -14,7 +14,7 @@ struct PreparedTranscription {
     func cleanup() { try? FileManager.default.removeItem(at: folder) }
 }
 
-/// File selection is explicit. Copy security-scoped/iCloud files locally, then
+/// File selection is explicit. Use the document picker's local copy, then
 /// compress/split when necessary to respect the 25 MB transcription upload limit.
 enum TranscriptionAudio {
     enum FileError: LocalizedError {
@@ -49,21 +49,15 @@ enum TranscriptionAudio {
                 throw FileError.unsupported
             }
             let copy = folder.appendingPathComponent(safeName)
-            // A file-provider URL may be a lazy iCloud download. Coordinated
-            // reading asks Files to make the bytes available before copying.
-            // This runs off the main actor so even a 65-minute recording
-            // cannot freeze the picker/UI while downloading or copying.
-            var coordinationError: NSError?
-            var copyingError: Error?
-            let coordinator = NSFileCoordinator(filePresenter: nil)
-            coordinator.coordinate(readingItemAt: source, options: [], error: &coordinationError) { readableURL in
-                do {
-                    try FileManager.default.copyItem(at: readableURL, to: copy)
-                } catch {
-                    copyingError = error
-                }
+            // UIDocumentPicker(asCopy: true) already hands us a local,
+            // app-readable copy. Do not re-coordinate that temporary copy:
+            // unnecessary file-provider coordination may fail on iPhone.
+            // The caller runs preparation in a cancellable Task, off the UI thread.
+            do {
+                try FileManager.default.copyItem(at: source, to: copy)
+            } catch {
+                throw FileError.access
             }
-            if coordinationError != nil || copyingError != nil { throw FileError.access }
             try Task.checkCancellation()
             let bytes = try FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? NSNumber
             guard let bytes, bytes.intValue > 0 else { throw FileError.empty }
