@@ -25,7 +25,8 @@ import UIKit
         reset()
         let token = requestID
         stage = .preparing
-        progress = "Получаю файл из «Файлов» · длинная запись может готовиться несколько минут"
+        filename = url.lastPathComponent
+        progress = "Файл выбран · проверяю запись и готовлю к обработке"
         task = Task {
             do {
                 let selection = try await TranscriptionAudio.prepare(url)
