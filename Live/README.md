@@ -1,4 +1,4 @@
-# Interpreter Live 1.3.1 (8) — voice sharing, audio import and streamlined settings
+# Interpreter Live 1.3.2 (9) — voice sharing, audio import and streamlined settings
 
 The tappable header «Русский ↔ Deutsch ⇵» opens a compact native iPhone wheel picker.
 Only emoji flags appear in the wheel; swiping up or down changes the language
@@ -140,3 +140,23 @@ IDs between separate parts may still represent different people.
 
 Selection and conversion are free and local; sending audio to OpenAI begins
 only after tapping «Расшифровать» and confirming the estimated price.
+
+## Physical-iPhone Files selection (1.3.2)
+
+The screenshot showed `Запись.m4a`, 341 KB, duration 00:39, with the
+Files information panel reporting "Аудио MPEG-4 Apple"; the earlier
+65-minute memo is a different recording. Both should be selectable.
+
+On some physical iPhones SwiftUI `.fileImporter` displays Files but a tap
+does not yield a URL. Transcription and translation attachment flows now
+use UIKit `UIDocumentPickerViewController(forOpeningContentTypes:asCopy:)`
+with `asCopy: true` and a selection delegate instead. This gives the
+application a temporary readable copy, so the preparation code no longer
+re-coordinates an already copied iCloud document. The selected filename
+becomes visible immediately before validation or chunking, so selection
+failure and processing failure are distinct.
+
+CI also checks that neither import entrypoint reintroduces SwiftUI's
+failing picker. This is still a **physical-device regression test**:
+verify that the modal closes and the chosen file appears, then verify
+duration, *before* approving a chargeable transcription.
