@@ -24,6 +24,15 @@ enum PartnerLanguage: String, CaseIterable, Identifiable {
         case .pl: return "🇵🇱"
         }
     }
+    var shortCode: String {
+        switch self {
+        case .de: return "DE"
+        case .en: return "GB"
+        case .es: return "ES"
+        case .ro: return "RO"
+        case .pl: return "PL"
+        }
+    }
     var buttonName: String { name }
     var uppercaseName: String { name.uppercased() }
 
