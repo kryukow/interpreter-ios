@@ -16,12 +16,13 @@ struct PreparedTranscription {
 
 /// File selection is explicit. Copy security-scoped/iCloud files locally, then
 /// compress/split when necessary to respect the 25 MB transcription upload limit.
-@MainActor enum TranscriptionAudio {
+enum TranscriptionAudio {
     enum FileError: LocalizedError {
-        case unsupported, empty, duration, compression, tooLarge
+        case unsupported, empty, duration, compression, tooLarge, access
         var errorDescription: String? {
             switch self {
-            case .unsupported: return "Не удалось открыть аудиозапись из «Файлов»."
+            case .unsupported: return "Выбери аудиозапись M4A, MP3, WAV, MP4, AAC или CAF. Этот файл не является поддерживаемым аудио."
+            case .access: return "Не удалось получить запись из «Файлов». Если файл в iCloud, сначала загрузи его на iPhone и повтори."
             case .empty: return "Выбран пустой аудиофайл."
             case .duration: return "Не удалось определить длительность записи."
             case .compression: return "Не удалось подготовить сжатый аудиофайл M4A."
@@ -37,10 +38,33 @@ struct PreparedTranscription {
             .appendingPathComponent("Interpreter-Transcript-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         do {
+            try Task.checkCancellation()
             let name = source.lastPathComponent.isEmpty ? "recording.m4a" : source.lastPathComponent
             let safeName = name.replacingOccurrences(of: "/", with: "_")
+            let supportedExtensions: Set<String> = [
+                "m4a", "mp3", "mp4", "mpeg", "mpga", "wav", "aac", "caf", "aiff", "aif",
+                "flac", "ogg", "opus", "webm"
+            ]
+            guard supportedExtensions.contains((safeName as NSString).pathExtension.lowercased()) else {
+                throw FileError.unsupported
+            }
             let copy = folder.appendingPathComponent(safeName)
-            try FileManager.default.copyItem(at: source, to: copy)
+            // A file-provider URL may be a lazy iCloud download. Coordinated
+            // reading asks Files to make the bytes available before copying.
+            // This runs off the main actor so even a 65-minute recording
+            // cannot freeze the picker/UI while downloading or copying.
+            var coordinationError: NSError?
+            var copyingError: Error?
+            let coordinator = NSFileCoordinator(filePresenter: nil)
+            coordinator.coordinate(readingItemAt: source, options: [], error: &coordinationError) { readableURL in
+                do {
+                    try FileManager.default.copyItem(at: readableURL, to: copy)
+                } catch {
+                    copyingError = error
+                }
+            }
+            if coordinationError != nil || copyingError != nil { throw FileError.access }
+            try Task.checkCancellation()
             let bytes = try FileManager.default.attributesOfItem(atPath: copy.path)[.size] as? NSNumber
             guard let bytes, bytes.intValue > 0 else { throw FileError.empty }
 
@@ -58,7 +82,7 @@ struct PreparedTranscription {
 
             // Chunks shorter than ten minutes bound the returned diarization text
             // and prevent large uncompressed Watch voice recordings from exceeding 25 MB.
-            let chunkLength = 540.0
+            let chunkLength = TranscriptionWire.chunkSeconds
             var parts: [PreparedTranscription.Part] = []
             var position = 0.0
             while position < seconds - 0.01 {
