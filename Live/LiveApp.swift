@@ -17,6 +17,7 @@ struct LiveView: View {
     @State private var settings = false
     @State private var exporting = false
     @State private var importing = false
+    @State private var showTranscription = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
     @State private var importError: String?
@@ -108,6 +109,12 @@ struct LiveView: View {
                         Label("Импорт аудио", systemImage: "square.and.arrow.down")
                     }
                     .disabled(model.busy)
+                    Button {
+                        showTranscription = true
+                    } label: {
+                        Label("Транскрибация записей", systemImage: "text.quote")
+                    }
+                    .disabled(model.busy)
                     if model.recordedWave == nil {
                         Text("Онлайн-перевод начинается во время удержания кнопки. После отпускания ждём только оставшуюся часть ответа. Звук микрофона записывается без усиления.")
                             .font(.footnote).foregroundStyle(.secondary)
@@ -118,6 +125,7 @@ struct LiveView: View {
         }.padding(.horizontal, 24).padding(.vertical, 12)
         .background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
+        .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
         .sheet(isPresented: $showLanguageWheel) {
             VStack(spacing: 0) {
                 HStack {
