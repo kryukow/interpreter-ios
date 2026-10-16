@@ -23,8 +23,10 @@ struct LiveView: View {
     @State private var importError: String?
     @AppStorage("live.keepAwake") private var keepAwake = true
     @AppStorage("live.partnerLanguage") private var partnerCode = "de"
-    @State private var showLanguageWheel = false
-    @State private var wheelSelection = "de"
+    @State private var orbitActive = false
+    @State private var orbitDragStart = 0
+    @State private var orbitStarted = false
+    @State private var orbitHide: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
     private var partner: PartnerLanguage { PartnerLanguage.current(partnerCode) }
     var body: some View {
@@ -32,31 +34,59 @@ struct LiveView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
                     Text("INTERPRETER LIVE").font(.caption2).tracking(3).foregroundStyle(.secondary)
-                    Button {
-                        guard model.phase == .idle else { return }
-                        wheelSelection = partnerCode
-                        showLanguageWheel = true
-                    } label: {
-                        HStack(spacing: 8) {
-                            Text("Русский ↔ \(partner.name)")
-                                .font(.title2.bold())
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.8)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
-                        }
+                    HStack(spacing: 8) {
+                        Text("Русский ↔").font(.title2.bold()).fixedSize()
+                        Text(partner.name)
+                            .font(.title2.bold())
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+                            .contentShape(Rectangle())
+                            .gesture(languageDrag)
+                            .accessibilityLabel("Иностранный язык: \(partner.name). Проведи влево или вправо")
+                            .accessibilityAddTraits(.isButton)
                     }
-                    .buttonStyle(.plain)
-                    .disabled(model.phase != .idle)
-                    .accessibilityLabel("Выбрать языки разговора: русский и \(partner.name)")
                 }
                 Spacer()
                 Button { model.stopAll(); settings = true } label: {
                     Image(systemName: "gearshape.fill").font(.title2)
                 }.disabled(model.busy).accessibilityLabel("Настройки")
             }
-            Image(systemName: "infinity").font(.system(size: 52, weight: .light))
+            ZStack {
+                Image(systemName: "infinity")
+                    .font(.system(size: 52, weight: .light))
+                    .opacity(orbitActive ? 0.08 : 1)
+                    .scaleEffect(orbitActive ? 1.45 : 1)
+                VStack(spacing: 6) {
+                    HStack(spacing: 6) {
+                        ForEach(PartnerLanguage.allCases) { choice in
+                            Button {
+                                selectLanguage(choice)
+                                scheduleOrbitHide(after: 0.55)
+                            } label: {
+                                Text(choice.flag)
+                                    .font(.system(size: choice == partner ? 32 : 25))
+                                    .frame(maxWidth: .infinity)
+                                    .frame(height: 51)
+                                    .background(choice == partner ? Color.white : Color.clear,
+                                                in: RoundedRectangle(cornerRadius: 15))
+                                    .opacity(choice == partner ? 1 : 0.50)
+                                    .scaleEffect(choice == partner ? 1.04 : 0.90)
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(choice.name)
+                        }
+                    }
+                    Text(partner.flag + " " + partner.name + " · выбрано")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .opacity(orbitActive ? 1 : 0)
+                .scaleEffect(orbitActive ? 1 : 0.94)
+                .allowsHitTesting(orbitActive && model.phase == .idle)
+            }
+            .frame(height: 72)
+            .animation(.spring(response: 0.34, dampingFraction: 0.83), value: orbitActive)
+            .sensoryFeedback(.selection, trigger: partnerCode)
             MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
             VStack(spacing: 5) {
                 Text(model.message).font(.headline).multilineTextAlignment(.center)
@@ -64,17 +94,7 @@ struct LiveView: View {
                     Text(String(format: "● %.1f с", model.elapsed)).font(.caption.monospacedDigit())
                 }
             }.frame(minHeight: 56)
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("ОСТАТОК · ПРИМЕРНО").font(.caption2).foregroundStyle(.secondary)
-                    Text(model.remainder).font(.title3.monospacedDigit().bold())
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("РАСХОД НОВОГО ПРИЛОЖЕНИЯ").font(.caption2).foregroundStyle(.secondary)
-                    Text(String(format: "$%.4f", model.spent)).font(.subheadline.monospacedDigit())
-                }
-            }.padding(16).background(Color(white: 0.07), in: RoundedRectangle(cornerRadius: 22))
+            BalanceSummary(account: model)
             HStack(spacing: 16) {
                 talk("Русский", language: "ru", target: "→ \(partner.uppercaseName)")
                 talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
@@ -126,47 +146,6 @@ struct LiveView: View {
         .background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
-        .sheet(isPresented: $showLanguageWheel) {
-            VStack(spacing: 0) {
-                HStack {
-                    Spacer()
-                    Button {
-                        showLanguageWheel = false
-                    } label: {
-                        Image(systemName: "checkmark")
-                            .font(.headline.weight(.bold))
-                            .frame(width: 42, height: 42)
-                            .background(.white.opacity(0.12), in: Circle())
-                    }
-                    .accessibilityLabel("Готово")
-                }
-                .padding(.horizontal, 22)
-                .padding(.top, 12)
-
-                Picker("Язык", selection: $wheelSelection) {
-                    ForEach(PartnerLanguage.allCases) { choice in
-                        Text(choice.flag)
-                            .font(.system(size: 42))
-                            .tag(choice.rawValue)
-                            .accessibilityLabel(choice.name)
-                    }
-                }
-                .pickerStyle(.wheel)
-                .labelsHidden()
-                .frame(maxWidth: .infinity)
-                .frame(height: 182)
-                .clipped()
-                .sensoryFeedback(.selection, trigger: wheelSelection)
-                .onChange(of: wheelSelection) { _, newValue in
-                    if PartnerLanguage(rawValue: newValue) != nil { partnerCode = newValue }
-                }
-                Spacer(minLength: 0)
-            }
-            .foregroundStyle(.white)
-            .presentationDetents([.height(280)])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(Color(white: 0.075))
-        }
         .sheet(isPresented: $importing) {
             RecordingDocumentPicker(
                 onSelected: { url in
@@ -203,6 +182,40 @@ struct LiveView: View {
             if phase != .active { model.background() }
         }
     }
+    private var languageDrag: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard model.phase == .idle else { return }
+                if !orbitStarted {
+                    orbitHide?.cancel()
+                    orbitDragStart = PartnerLanguage.allCases.firstIndex(of: partner) ?? 0
+                    orbitStarted = true
+                    withAnimation { orbitActive = true }
+                }
+                let offset = Int((-value.translation.width / 57).rounded())
+                let index = min(max(orbitDragStart + offset, 0), PartnerLanguage.allCases.count - 1)
+                selectLanguage(PartnerLanguage.allCases[index])
+            }
+            .onEnded { value in
+                orbitStarted = false
+                scheduleOrbitHide(after: abs(value.translation.width) < 8 ? 3.5 : 0.45)
+            }
+    }
+
+    private func selectLanguage(_ choice: PartnerLanguage) {
+        guard model.phase == .idle else { return }
+        partnerCode = choice.rawValue
+    }
+
+    private func scheduleOrbitHide(after seconds: Double) {
+        orbitHide?.cancel()
+        orbitHide = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            withAnimation { orbitActive = false }
+        }
+    }
+
     private func talk(_ title: String, language: String, target: String) -> some View {
         PressButton(title: title, subtitle: target, pressed: model.held == language,
                     enabled: !model.busy || model.held == language,
@@ -211,6 +224,52 @@ struct LiveView: View {
     }
     private func updateAwake() {
         UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
+    }
+}
+
+/// One visual readout backed by the same LiveSession in both feature screens.
+struct BalanceSummary: View {
+    @ObservedObject var account: LiveSession
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("ОБЩИЙ ОСТАТОК API · ПРИМЕРНО")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(account.remainder).font(.title3.monospacedDigit().bold())
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text("ОБЩИЙ РАСХОД")
+                        .font(.caption2).foregroundStyle(.secondary)
+                    Text(String(format: "$%.4f", account.spent))
+                        .font(.subheadline.monospacedDigit())
+                }
+            }
+            Divider().overlay(Color.white.opacity(0.08))
+            HStack {
+                Text("Перевод · новые расходы")
+                Spacer()
+                Text(String(format: "$%.4f", account.translationSpent))
+            }
+            HStack {
+                Text("Транскрибация · новые расходы")
+                Spacer()
+                Text(String(format: "$%.4f", account.transcriptionSpent))
+            }
+            .padding(.bottom, 1)
+            if account.lowBalance {
+                Label("Предполагаемый остаток меньше $1 · проверь баланс OpenAI",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+            }
+            Text("Локальная оценка, не банковский баланс. Старые расходы включены в общий итог.")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+        .font(.caption.monospacedDigit())
+        .padding(16)
+        .background(Color(white: 0.07), in: RoundedRectangle(cornerRadius: 22))
     }
 }
 
