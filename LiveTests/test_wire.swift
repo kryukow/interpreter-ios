@@ -99,6 +99,12 @@ import Foundation
             // A permissions error does not prove the secret was incorrect.
         } else { fatalError("Missing model permission must not mark key invalid") }
         // New recorded-audio transcription modes must never be mixed up.
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 65 * 60) == 8,
+               "65-minute Watch recording must be split into eight chunks")
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 60) == 1,
+               "Short recordings must not be split")
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 0) == 0,
+               "Zero-length audio is invalid")
         expect(TranscriptionMode.single.model == "gpt-transcribe", "Incorrect standard ASR model")
         expect(TranscriptionMode.group.model == "gpt-4o-transcribe-diarize", "Incorrect diarization model")
         expect(abs(TranscriptionMode.single.price(for: 3600) - 0.27) < 0.00001,
@@ -118,6 +124,9 @@ import Foundation
                 let json = Data(#"{"text":"Hello world","segments":[{"speaker":"A","start":0,"end":1.2,"text":"Hello"},{"speaker":"B","start":1.3,"end":2,"text":"world"}]}"#.utf8)
                 let transcript = try TranscriptionWire.parse(json, mode: .group)
                 expect(transcript.segments.count == 2, "Speaker annotations missing")
+                expect(transcript.formatted(mode: .group, offsetSeconds: 3600)
+                           .contains("[60:01] B:"),
+                       "Long recording segment timestamps must be absolute")
                 expect(transcript.formatted(mode: .group).contains("[00:01] B:"),
                        "Second speaker timestamp lost")
             } else {
