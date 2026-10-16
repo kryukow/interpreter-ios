@@ -274,28 +274,20 @@ struct TranscriptionView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Label("Транскрибация", systemImage: "waveform.badge.mic")
-                            .font(.title2.bold())
-                        Text("Записи Apple Watch, диктофона и WhatsApp. Длинные записи тоже поддерживаются.")
-                            .foregroundStyle(.secondary)
-                            .font(.subheadline)
-                    }
+                VStack(alignment: .leading, spacing: 14) {
+                    Text("Транскрибация")
+                        .font(.title2.bold())
 
                     BalanceSummary(account: account)
 
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Сколько людей разговаривает?").font(.headline)
+                        Text("Режим распознавания").font(.headline)
                         Picker("Режим", selection: $session.mode) {
                             Text("Один голос").tag(TranscriptionMode.single)
                             Text("Несколько голосов").tag(TranscriptionMode.group)
                         }
                         .pickerStyle(.segmented)
                         .disabled(session.working || session.finishedCount > 0)
-                        Text(session.mode.explanation)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
                         HStack {
                             Text(session.mode.model).font(.caption.monospaced())
                             Spacer()
@@ -303,12 +295,8 @@ struct TranscriptionView: View {
                                 .font(.caption.monospacedDigit())
                         }
                         .foregroundStyle(.secondary)
-                        if session.mode == .group {
-                            Text("Говорящие обозначаются буквами. Если длинный файл разделён, буквы могут начинаться заново в каждой части.")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
                         Divider()
-                        Text("Какие языки звучат в записи?").font(.headline)
+                        Text("Язык записи").font(.subheadline.weight(.semibold))
                         Picker("Подсказка языка", selection: $session.languageHint) {
                             ForEach(TranscriptionLanguageHint.allCases) { hint in
                                 Text(hint.label).tag(hint)
@@ -317,26 +305,26 @@ struct TranscriptionView: View {
                         .pickerStyle(.menu)
                         .tint(.white)
                         .disabled(session.working || session.finishedCount > 0)
-                        Text(session.mode == .group && session.languageHint.isMultilingual
-                             ? "В режиме нескольких голосов OpenAI принимает подсказку только одного языка. Для пары языков оставляем автоопределение."
-                             : "Подсказка помогает сохранить язык оригинала. Это расшифровка, не перевод.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
+                        if session.mode == .group && session.languageHint.isMultilingual {
+                            Label("Для пары языков используется автоопределение.",
+                                  systemImage: "info.circle")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                     .padding(16)
-                    .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 20))
+                    .background(Color(white: 0.085), in: RoundedRectangle(cornerRadius: 20))
 
                     VStack(alignment: .leading, spacing: 12) {
                         Button {
                             importing = true
                         } label: {
-                            Label(session.filename.isEmpty ? "Выбрать аудиозапись" : "Выбрать другой файл",
+                            Label(session.filename.isEmpty ? "Выбрать аудиозапись" : "Выбрать другую запись",
                                   systemImage: "waveform.badge.plus")
                                 .font(.headline)
                                 .foregroundStyle(.white)
                                 .frame(maxWidth: .infinity, minHeight: 52)
-                                .background(Color(white: 0.22),
-                                            in: RoundedRectangle(cornerRadius: 14))
+                                .background(Color(white: 0.23),
+                                            in: RoundedRectangle(cornerRadius: 15))
                         }
                         .buttonStyle(.plain)
                         .disabled(session.working)
@@ -379,21 +367,22 @@ struct TranscriptionView: View {
                         Button {
                             showConfirmation = true
                         } label: {
-                            Label(session.hasIncomplete ? "Продолжить с неготовой части" : "Расшифровать",
-                                  systemImage: "text.alignleft")
-                                .frame(maxWidth: .infinity)
-                                .padding(10)
+                            Text(session.hasIncomplete ? "Продолжить с неготовой части" : "Расшифровать")
+                                .font(.headline)
+                                .foregroundStyle(Color.black)
+                                .frame(maxWidth: .infinity, minHeight: 50)
+                                .background(Color(white: 0.94),
+                                            in: RoundedRectangle(cornerRadius: 15))
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.plain)
                         .disabled(!session.ready)
+                        .opacity(session.ready ? 1 : 0.35)
                         if !session.filename.isEmpty && !session.working {
                             Button("Удалить сохранённую запись и результат", role: .destructive) {
                                 session.clearSaved()
                             }
                             .font(.footnote)
                         }
-                        Text("Списание происходит через твой API-ключ OpenAI. Итоговая сумма может отличаться от предварительной оценки.")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                     .padding(16)
                     .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 20))
@@ -426,7 +415,7 @@ struct TranscriptionView: View {
                         .background(Color(white: 0.085), in: RoundedRectangle(cornerRadius: 20))
                     }
                 }
-                .padding(18)
+                .padding(16)
             }
             .background(Color.black)
             .navigationTitle("Аудиозаписи")
