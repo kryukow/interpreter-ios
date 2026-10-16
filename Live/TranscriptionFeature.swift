@@ -161,7 +161,7 @@ struct TranscriptionView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Label("Транскрибация", systemImage: "waveform.badge.mic")
                             .font(.title2.bold())
-                        Text("Преврати запись с Apple Watch, диктофона или из WhatsApp в текст.")
+                        Text("Записи Apple Watch, диктофона и WhatsApp. Длинные записи тоже поддерживаются.")
                             .foregroundStyle(.secondary)
                             .font(.subheadline)
                     }
@@ -196,13 +196,18 @@ struct TranscriptionView: View {
                         Button {
                             importing = true
                         } label: {
-                            Label(session.filename.isEmpty ? "Выбрать аудиофайл" : "Выбрать другой файл",
-                                  systemImage: "doc.badge.plus")
-                                .frame(maxWidth: .infinity)
-                                .padding(12)
+                            Label(session.filename.isEmpty ? "Выбрать аудиозапись" : "Выбрать другой файл",
+                                  systemImage: "waveform.badge.plus")
+                                .font(.headline)
+                                .foregroundStyle(.white)
+                                .frame(maxWidth: .infinity, minHeight: 52)
+                                .background(Color(white: 0.22),
+                                            in: RoundedRectangle(cornerRadius: 14))
                         }
-                        .buttonStyle(.borderedProminent)
+                        .buttonStyle(.plain)
                         .disabled(session.working)
+                        .opacity(session.working ? 0.55 : 1)
+                        .accessibilityHint("Открыть Файлы iPhone, включая записи Apple Watch")
 
                         if !session.filename.isEmpty {
                             Text(session.filename).font(.subheadline).lineLimit(2)
@@ -284,11 +289,22 @@ struct TranscriptionView: View {
                     }
                 }
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.audio]) { result in
+            // Some Apple Watch/Voice Memos recordings from iCloud Drive are not
+            // advertised by Files as UTType.audio. Permit document selection,
+            // then validate audio in TranscriptionAudio before any API request.
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.item],
+                          allowsMultipleSelection: false) { result in
                 switch result {
-                case .success(let url): session.selectFile(url)
+                case .success(let urls):
+                    guard let url = urls.first else {
+                        session.reportError("Файл не выбран.")
+                        return
+                    }
+                    session.selectFile(url)
                 case .failure(let error):
-                    session.reportError(error.localizedDescription)
+                    if (error as NSError).code != NSUserCancelledError {
+                        session.reportError(error.localizedDescription)
+                    }
                 }
             }
             .fileExporter(isPresented: $exporting, document: document,
