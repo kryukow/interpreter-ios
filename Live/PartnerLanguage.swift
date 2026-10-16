@@ -3,7 +3,7 @@ import Foundation
 /// The only conversation partners shown in Interpreter Live.
 /// Russian is the fixed second language, so direction stays explicit.
 enum PartnerLanguage: String, CaseIterable, Identifiable {
-    case de, ro, en, es, pl
+    case de, en, es, ro, pl
 
     var id: String { rawValue }
     var name: String {
