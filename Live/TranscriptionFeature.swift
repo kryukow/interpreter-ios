@@ -123,6 +123,7 @@ import UIKit
         task = Task {
             for (index, part) in selection.parts.enumerated() {
                 guard saved?.completed[index] == nil else { continue }
+                var requestWasSubmitted = false
                 do {
                     try Task.checkCancellation()
                     guard requestID == token else { return }
@@ -134,6 +135,7 @@ import UIKit
                         file: data, filename: part.url.lastPathComponent, key: key,
                         mode: selectedMode, boundary: boundary, hint: selectedHint
                     )
+                    requestWasSubmitted = true
                     let (answerData, rawResponse) = try await URLSession.shared.data(for: request)
                     try Task.checkCancellation()
                     guard requestID == token else { return }
@@ -169,11 +171,9 @@ import UIKit
                     guard requestID == token else { return }
                     if let wireError = error as? TranscriptWireError,
                        case .invalidKey = wireError { account.transcriptionKeyRejected() }
-                    // A timeout/network interruption cannot establish whether the server billed.
-                    if let urlError = error as? URLError,
-                       [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(urlError.code) {
-                        markUnknown(index)
-                    }
+                    // Any sent but uncommitted response might have consumed credits.
+                    // Never silently treat a timed-out/failed HTTP call as free.
+                    if requestWasSubmitted { markUnknown(index) }
                     currentRequestIndex = nil
                     stage = .ready
                     errorMessage = (error as? URLError)?.code == .timedOut
