@@ -255,6 +255,21 @@ final class LocalVoiceLab: ObservableObject {
 
     func stopPlayback() { player?.stop(); player = nil }
 
+    func deleteVoice() {
+        guard !busy else { return }
+        do {
+            if FileManager.default.fileExists(atPath: Self.voiceURL.path) {
+                try FileManager.default.removeItem(at: Self.voiceURL)
+            }
+            hasVoice = false
+            outputURL = nil
+            stopPlayback()
+            status = "Сохранённая копия голоса удалена с iPhone."
+        } catch {
+            status = "Не удалось удалить копию голоса: \(error.localizedDescription)"
+        }
+    }
+
     func cleanup() {
         task?.cancel()
         stopPlayback()
@@ -292,6 +307,7 @@ struct LocalVoiceLabView: View {
     @State private var language = "ru"
     @State private var phrase = "Привет! Это мой собственный голос, созданный нейросетью прямо на айфоне."
     @State private var importing = false
+    @State private var confirmingVoiceDeletion = false
 
     var body: some View {
         NavigationStack {
@@ -336,6 +352,9 @@ struct LocalVoiceLabView: View {
                     if engine.hasVoice {
                         Label("Копия голоса сохранена на iPhone", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
+                        Button("Удалить мою копию голоса", role: .destructive) {
+                            confirmingVoiceDeletion = true
+                        }.disabled(engine.busy)
                     }
                 }
                 Section("3 · Проверка озвучивания") {
@@ -377,6 +396,10 @@ struct LocalVoiceLabView: View {
             .fileImporter(isPresented: $importing,
                           allowedContentTypes: [.audio, .mpeg4Audio, .wav, .mp3]) { result in
                 if case .success(let url) = result { engine.importReference(url) }
+            }
+            .confirmationDialog("Удалить сохранённую копию голоса с iPhone?",
+                                isPresented: $confirmingVoiceDeletion) {
+                Button("Удалить голос", role: .destructive) { engine.deleteVoice() }
             }
             .onDisappear { engine.cleanup() }
         }
