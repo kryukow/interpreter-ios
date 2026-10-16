@@ -98,6 +98,41 @@ import Foundation
         if case .failure(.authorization) = try TranslationWire.event(permissionError) {
             // A permissions error does not prove the secret was incorrect.
         } else { fatalError("Missing model permission must not mark key invalid") }
+        // New recorded-audio transcription modes must never be mixed up.
+        expect(TranscriptionMode.single.model == "gpt-transcribe", "Incorrect standard ASR model")
+        expect(TranscriptionMode.group.model == "gpt-4o-transcribe-diarize", "Incorrect diarization model")
+        expect(abs(TranscriptionMode.single.price(for: 3600) - 0.27) < 0.00001,
+               "One-hour estimate changed")
+        let boundary = "TestBoundary123"
+        for mode in TranscriptionMode.allCases {
+            let payload = try TranscriptionWire.request(
+                file: Data([1, 2, 3, 4]), filename: "example.m4a",
+                key: "sk-test", mode: mode, boundary: boundary)
+            let body = String(decoding: payload.httpBody ?? Data(), as: UTF8.self)
+            expect(payload.httpMethod == "POST", "Transcription must use POST")
+            expect(body.contains(mode.model), "Request used wrong transcription model")
+            expect(body.contains("filename=\\"example.m4a\\""), "Multipart file missing")
+            if mode == .group {
+                expect(body.contains("diarized_json") && body.contains("chunking_strategy"),
+                       "Speaker mode must request diarized JSON and automatic chunking")
+                let json = Data("{\\"text\\":\\"Hello world\\",\\"segments\\":[{\\"speaker\\":\\"A\\",\\"start\\":0,\\"end\\":1.2,\\"text\\":\\"Hello\\"},{\\"speaker\\":\\"B\\",\\"start\\":1.3,\\"end\\":2,\\"text\\":\\"world\\"}]}".utf8)
+                let transcript = try TranscriptionWire.parse(json, mode: .group)
+                expect(transcript.segments.count == 2, "Speaker annotations missing")
+                expect(transcript.formatted(mode: .group).contains("[00:01] B:"),
+                       "Second speaker timestamp lost")
+            } else {
+                expect(body.contains("languages[]") && !body.contains("diarized_json"),
+                       "Single-speaker multilingual hints were not set")
+                let json = Data("{\\"text\\":\\"Guten Morgen!\\",\\"languages\\":[{\\"code\\":\\"de\\"}]}".utf8)
+                let transcript = try TranscriptionWire.parse(json, mode: .single)
+                expect(transcript.text == "Guten Morgen!" && transcript.languages == ["de"],
+                       "Original language was not preserved")
+            }
+        }
+        rejected({ _ = try TranscriptionWire.request(
+            file: Data(repeating: 1, count: TranscriptionWire.maxBytes + 1),
+            filename: "big.m4a", key: "sk-test", mode: .single, boundary: "B") },
+            "Oversized transcription file accepted")
         print("Fresh translation wire tests passed")
     }
 }
