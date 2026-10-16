@@ -34,7 +34,7 @@ enum TranscriptionAudio {
     static func prepare(_ source: URL) async throws -> PreparedTranscription {
         let granted = source.startAccessingSecurityScopedResource()
         defer { if granted { source.stopAccessingSecurityScopedResource() } }
-        let folder = FileManager.default.temporaryDirectory
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Interpreter-Transcript-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         do {
@@ -69,12 +69,12 @@ enum TranscriptionAudio {
 
             let extensionName = copy.pathExtension.lowercased()
             let accepted = ["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm"].contains(extensionName)
-            if seconds <= 540, bytes.intValue <= TranscriptionWire.maxBytes, accepted {
+            if seconds <= TranscriptionWire.chunkSeconds, bytes.intValue <= TranscriptionWire.maxBytes, accepted {
                 return PreparedTranscription(folder: folder, filename: name,
                                              duration: seconds, parts: [.init(url: copy, seconds: seconds)])
             }
 
-            // Chunks shorter than ten minutes bound the returned diarization text
+            // Short locally persisted chunks bound the returned diarization text
             // and prevent large uncompressed Watch voice recordings from exceeding 25 MB.
             let chunkLength = TranscriptionWire.chunkSeconds
             var parts: [PreparedTranscription.Part] = []
