@@ -11,6 +11,13 @@ import Foundation
         let pcm = Data((0..<19_202).map { UInt8(truncatingIfNeeded: $0 * 37) })
         let wav = try WavePCM.encode(pcm)
         expect(try WavePCM.decode(wav) == pcm, "WAV round trip changed samples")
+        let sampleURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("Live-Import-Test-\(UUID().uuidString).wav")
+        try wav.write(to: sampleURL)
+        defer { try? FileManager.default.removeItem(at: sampleURL) }
+        let imported = try ImportedAudio.read(url: sampleURL)
+        expect(imported.count > 4_800, "Local WAV import failed")
+        expect(imported.count <= WavePCM.maximumInputBytes, "Imported length exceeded maximum")
         let frames = try WavePCM.frames(pcm)
         expect(frames.map(\.count) == [9_600, 9_600, 9_600], "Final frame must match PC padding")
         expect(frames.reduce(into: Data()) { $0.append($1) } == pcm + Data(repeating: 0, count: 9598), "Frame ordering or samples changed")
@@ -44,7 +51,18 @@ import Foundation
         for shift in 0..<4 { decorated[4 + shift] = UInt8((riffSize >> (shift * 8)) & 255) }
         expect(try WavePCM.decode(decorated) == pcm, "Metadata scan changed PCM")
 
-        for target in ["ru", "de"] {
+        expect(PartnerLanguage.allCases.map(\.rawValue) == ["de", "en", "es", "ro", "pl"],
+               "Unexpected partner languages")
+        expect(PartnerLanguage.allCases.map(\.shortCode) == ["DE", "GB", "ES", "RO", "PL"],
+               "Infinity Switch must display approved text codes, never flags")
+        expect(PartnerLanguage.current("unknown") == .de, "Unsupported saved language must fall back to German")
+        for partner in PartnerLanguage.allCases {
+            expect(partner.outputCode(whenSourceIsRussian: true) == partner.rawValue,
+                   "Russian must translate to explicitly chosen partner")
+            expect(partner.outputCode(whenSourceIsRussian: false) == "ru",
+                   "Partner must always translate to Russian")
+        }
+        for target in ["ru", "de", "ro", "en", "es", "pl"] {
             let config = try JSONSerialization.jsonObject(with: Data(TranslationWire.configuration(target: target).utf8)) as! [String: Any]
             expect(config["type"] as? String == "session.update", "Wrong config event")
             let session = config["session"] as! [String: Any]
@@ -74,6 +92,80 @@ import Foundation
         if case .text(let delta) = try TranslationWire.event(textEvent) {
             expect(delta == " Wort", "Transcript boundary changed")
         } else { fatalError("Text not parsed") }
+        let invalidKeyError = Data("{\"type\":\"error\",\"error\":{\"code\":\"invalid_api_key\"}}".utf8)
+        if case .failure(.invalidAPIKey) = try TranslationWire.event(invalidKeyError) {
+            // Explicitly rejected API credentials should show red.
+        } else { fatalError("Invalid API key response must be distinguished") }
+        let permissionError = Data("{\"type\":\"error\",\"error\":{\"code\":\"permission_denied\"}}".utf8)
+        if case .failure(.authorization) = try TranslationWire.event(permissionError) {
+            // A permissions error does not prove the secret was incorrect.
+        } else { fatalError("Missing model permission must not mark key invalid") }
+        // New recorded-audio transcription modes must never be mixed up.
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 65 * 60) == 22,
+               "65-minute Watch recording must be split into short chunks")
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 60) == 1,
+               "Short recordings must not be split")
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 0) == 0,
+               "Zero-length audio is invalid")
+        expect(TranscriptionMode.single.model == "gpt-transcribe", "Incorrect standard ASR model")
+        expect(TranscriptionMode.group.model == "gpt-4o-transcribe-diarize", "Incorrect diarization model")
+        expect(abs(TranscriptionMode.single.price(for: 3600) - 0.27) < 0.00001,
+               "One-hour estimate changed")
+        let boundary = "TestBoundary123"
+        for mode in TranscriptionMode.allCases {
+            let payload = try TranscriptionWire.request(
+                file: Data([1, 2, 3, 4]), filename: "example.m4a",
+                key: "sk-test", mode: mode, boundary: boundary)
+            let body = String(decoding: payload.httpBody ?? Data(), as: UTF8.self)
+            expect(payload.httpMethod == "POST", "Transcription must use POST")
+            expect(body.contains(mode.model), "Request used wrong transcription model")
+            expect(body.contains(#"filename="example.m4a""#), "Multipart file missing")
+            if mode == .group {
+                expect(body.contains(#"name="language""#) && body.contains("ru"),
+                       "Diarization language should be pinned to Russian by default")
+                expect(body.contains("diarized_json") && body.contains("chunking_strategy"),
+                       "Speaker mode must request diarized JSON and automatic chunking")
+                let json = Data(#"{"text":"Hello world","segments":[{"speaker":"A","start":0,"end":1.2,"text":"Hello"},{"speaker":"B","start":1.3,"end":2,"text":"world"}]}"#.utf8)
+                let transcript = try TranscriptionWire.parse(json, mode: .group)
+                expect(transcript.segments.count == 2, "Speaker annotations missing")
+                expect(transcript.formatted(mode: .group, offsetSeconds: 3600)
+                           .contains("[60:01] B:"),
+                       "Long recording segment timestamps must be absolute")
+                expect(transcript.formatted(mode: .group).contains("[00:01] B:"),
+                       "Second speaker timestamp lost")
+            } else {
+                expect(body.contains("languages[]") && !body.contains("diarized_json"),
+                       "Single-speaker multilingual hints were not set")
+                let json = Data(#"{"text":"Guten Morgen!","languages":[{"code":"de"}]}"#.utf8)
+                let transcript = try TranscriptionWire.parse(json, mode: .single)
+                expect(transcript.text == "Guten Morgen!" && transcript.languages == ["de"],
+                       "Original language was not preserved")
+            }
+        }
+
+        // Single-language and bilingual hints map to distinct API fields.
+        let singleRU = try TranscriptionWire.request(
+            file: Data([1,2]), filename: "ru.m4a", key: "test",
+            mode: .single, boundary: "H", hint: .ru)
+        let ruBody = String(decoding: singleRU.httpBody ?? Data(), as: UTF8.self)
+        expect(ruBody.contains("languages[]") && !ruBody.contains(#"name="language""#),
+               "gpt-transcribe must send the plural languages[]")
+        let mixed = try TranscriptionWire.request(
+            file: Data([1,2]), filename: "mixed.m4a", key: "test",
+            mode: .single, boundary: "H", hint: .ruES)
+        let mixedBody = String(decoding: mixed.httpBody ?? Data(), as: UTF8.self)
+        expect(mixedBody.contains("ru") && mixedBody.contains("es"),
+               "Russian-Spanish bilingual hint was not sent")
+        let groupMix = try TranscriptionWire.request(
+            file: Data([1,2]), filename: "mixed.m4a", key: "test",
+            mode: .group, boundary: "H", hint: .ruEN)
+        let groupBody = String(decoding: groupMix.httpBody ?? Data(), as: UTF8.self)
+        expect(!groupBody.contains("languages[]") && !groupBody.contains(#"name="language""#),
+               "Diarization does not support bilingual hint lists")
+        rejected({ _ = try TranscriptionWire.request(
+            file: Data(repeating: 1, count: TranscriptionWire.maxBytes + 1),
+            filename: "big.m4a", key: "sk-test", mode: .single, boundary: "B") },
+            "Oversized transcription file accepted")
         print("Fresh translation wire tests passed")
     }
 }

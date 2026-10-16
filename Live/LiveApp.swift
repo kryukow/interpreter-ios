@@ -16,100 +16,338 @@ struct LiveView: View {
     @StateObject private var model = LiveSession()
     @State private var settings = false
     @State private var exporting = false
+    @State private var importing = false
+    @State private var showTranscription = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
+    @State private var importError: String?
     @AppStorage("live.keepAwake") private var keepAwake = true
+    @AppStorage("live.partnerLanguage") private var partnerCode = "de"
+    @State private var orbitActive = false
+    @State private var orbitDragStart = 0
+    @State private var orbitStarted = false
+    @State private var orbitHide: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
+
+    private var partner: PartnerLanguage { PartnerLanguage.current(partnerCode) }
+    private var languages: [PartnerLanguage] { PartnerLanguage.allCases }
+
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("INTERPRETER LIVE").font(.caption2).tracking(3).foregroundStyle(.secondary)
-                    Text("Русский ↔ Deutsch").font(.title2.bold())
+        ScrollView {
+            VStack(spacing: 11) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text("INTERPRETER LIVE")
+                            .font(.system(size: 10, weight: .medium))
+                            .tracking(3.2)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 7) {
+                            Text("Русский ↔")
+                                .font(.title2.bold())
+                                .fixedSize()
+                            Text(partner.name)
+                                .font(.title2.bold())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.73)
+                                .contentShape(Rectangle())
+                                .gesture(languageDrag)
+                                .accessibilityLabel("Язык: \(partner.name). Проведи пальцем влево или вправо")
+                                .accessibilityAddTraits(.isButton)
+                        }
+                    }
+                    Spacer(minLength: 6)
+                    Button { model.stopAll(); settings = true } label: {
+                        Image(systemName: "gearshape")
+                            .font(.title2.weight(.medium))
+                            .frame(width: 36, height: 36)
+                    }
+                    .disabled(model.busy)
+                    .accessibilityLabel("Настройки")
                 }
-                Spacer()
-                Button { model.stopAll(); settings = true } label: {
-                    Image(systemName: "gearshape.fill").font(.title2)
-                }.disabled(model.busy).accessibilityLabel("Настройки")
+                .padding(.top, 12)
+
+                ZStack {
+                    Image(systemName: "infinity")
+                        .font(.system(size: 76, weight: .light))
+                        .opacity(orbitActive ? 0.10 : 1)
+                        .scaleEffect(orbitActive ? 1.7 : 1)
+                        .accessibilityHidden(true)
+
+                    ForEach(languages) { choice in
+                        let distance = cyclicDistance(for: choice)
+                        let active = distance == 0
+                        Button {
+                            selectLanguage(choice)
+                            scheduleOrbitHide(after: 0.65)
+                        } label: {
+                            Text(choice.shortCode)
+                                .font(.system(size: active ? 24 : 19, weight: .bold))
+                                .foregroundStyle(active ? Color.black : Color.white)
+                                .frame(width: active ? 65 : 47, height: active ? 58 : 50)
+                                .background(
+                                    active ? Color(white: 0.91) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 18)
+                                )
+                                .opacity(active ? 1 : abs(distance) == 1 ? 0.72 : 0.28)
+                                .scaleEffect(active ? 1 : abs(distance) == 1 ? 0.90 : 0.70)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: CGFloat(distance) * 70)
+                        .opacity(orbitActive ? 1 : 0)
+                        .allowsHitTesting(orbitActive && model.phase == .idle)
+                        .accessibilityLabel(choice.name)
+                    }
+                    Text("\(partner.shortCode) · \(partner.name) · выбрано")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .offset(y: 49)
+                        .opacity(orbitActive ? 1 : 0)
+                }
+                .frame(height: 123)
+                .animation(.spring(response: 0.33, dampingFraction: 0.83), value: orbitActive)
+                .animation(.spring(response: 0.29, dampingFraction: 0.85), value: partnerCode)
+                .sensoryFeedback(.selection, trigger: partnerCode)
+
+                MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
+                    .frame(height: 23)
+
+                VStack(spacing: 3) {
+                    Text(model.message == "Удерживай кнопку нужного языка" ? "Готово" : model.message)
+                        .font(.subheadline.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                    if model.phase == .recording {
+                        Text(String(format: "● %.1f с", model.elapsed))
+                            .font(.caption.monospacedDigit())
+                    }
+                }
+                .frame(minHeight: 27)
+
+                BalanceSummary(account: model)
+
+                HStack(spacing: 12) {
+                    talk("Русский", language: "ru", target: "→ \(partner.uppercaseName)")
+                    talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
+                }
+                .frame(height: 136)
+
+                Button { showTranscription = true } label: {
+                    HStack(spacing: 13) {
+                        Image(systemName: "waveform.badge.mic")
+                            .font(.title2)
+                            .frame(width: 41, height: 41)
+                            .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Голос → текст")
+                                .font(.headline)
+                            Text("Транскрибация аудиозаписей")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .foregroundStyle(.white)
+                    .padding(13)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        LinearGradient(colors: [Color(white: 0.14), Color(white: 0.07)],
+                                       startPoint: .leading, endPoint: .trailing),
+                        in: RoundedRectangle(cornerRadius: 18)
+                    )
+                    .overlay(RoundedRectangle(cornerRadius: 18)
+                        .strokeBorder(Color.white.opacity(0.14)))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.busy)
+                .accessibilityHint("Открыть расшифровку аудиозаписей")
+
+                HStack {
+                    Button {
+                        importing = true
+                    } label: {
+                        Label("Импорт аудио", systemImage: "square.and.arrow.down")
+                    }
+                    .disabled(model.busy)
+                    Spacer()
+                    Text(liveVersion)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+                if !model.text.isEmpty || !model.details.isEmpty ||
+                   model.recordedWave != nil || model.translatedWave != nil {
+                    VStack(alignment: .leading, spacing: 11) {
+                        if !model.text.isEmpty {
+                            Text(model.text).font(.subheadline)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if !model.details.isEmpty {
+                            Text(model.details).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if model.translatedWave != nil {
+                            HStack {
+                                Button("Прослушать") { model.replay() }
+                                Button("Сохранить перевод") {
+                                    if let translated = model.translatedWave {
+                                        document = RecordingDocument(data: translated)
+                                        exporting = true
+                                    }
+                                }
+                                if let url = model.shareURL {
+                                    ShareLink(item: url) { Label("Отправить", systemImage: "square.and.arrow.up") }
+                                }
+                            }
+                            .font(.caption)
+                            .disabled(model.busy)
+                        }
+                        if model.recordedWave != nil {
+                            Button("Послушать свою запись") { model.review() }
+                                .font(.caption)
+                                .disabled(model.busy)
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 16))
+                }
+
             }
-            Image(systemName: "infinity").font(.system(size: 52, weight: .light))
-            HStack(spacing: 4) {
-                ForEach(0..<40, id: \.self) { index in
-                    Capsule().fill(.white.opacity(0.85))
-                        .frame(width: 3, height: model.phase == .recording ? max(3, model.levels[index] * 42) : 3)
-                }
-            }.frame(height: 44).accessibilityHidden(true)
-            VStack(spacing: 5) {
-                Text(model.message).font(.headline).multilineTextAlignment(.center)
-                if model.phase == .recording {
-                    Text(String(format: "● %.1f с", model.elapsed)).font(.caption.monospacedDigit())
-                }
-            }.frame(minHeight: 56)
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("ОСТАТОК · ПРИМЕРНО").font(.caption2).foregroundStyle(.secondary)
-                    Text(model.remainder).font(.title3.monospacedDigit().bold())
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("РАСХОД НОВОГО ПРИЛОЖЕНИЯ").font(.caption2).foregroundStyle(.secondary)
-                    Text(String(format: "$%.4f", model.spent)).font(.subheadline.monospacedDigit())
-                }
-            }.padding(16).background(Color(white: 0.07), in: RoundedRectangle(cornerRadius: 22))
-            HStack(spacing: 16) {
-                talk("Русский", language: "ru", target: "→ DEUTSCH")
-                talk("Deutsch", language: "de", target: "→ РУССКИЙ")
-            }.frame(height: 145)
-            Text("Держи → вибросигнал → говори → отпусти")
-                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("ГОЛОСОВОЙ ПЕРЕВОД · API").font(.caption).foregroundStyle(.secondary)
-                    Text(model.text.isEmpty ? "—" : model.text).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if !model.details.isEmpty { Text(model.details).font(.caption).foregroundStyle(.secondary) }
-                    if model.translatedWave != nil {
-                        Button(model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Проверить звук ответа · бесплатно" : "Прослушать снова · бесплатно") { model.replay() }.disabled(model.busy)
-                    }
-                    if let wave = model.recordedWave {
-                        Button("Послушать свою запись · бесплатно") { model.review() }.disabled(model.busy)
-                        Button("Сохранить WAV") {
-                            document = RecordingDocument(data: wave); exporting = true
-                        }.disabled(model.busy)
-                    }
-                    if model.recordedWave == nil {
-                        Text("Онлайн-перевод начинается во время удержания кнопки. После отпускания ждём только оставшуюся часть ответа. Звук микрофона записывается без усиления.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }.padding(18).background(Color(white: 0.055), in: RoundedRectangle(cornerRadius: 22))
-            }.frame(maxHeight: .infinity)
-            Text(liveVersion).font(.caption2).foregroundStyle(.secondary)
-        }.padding(.horizontal, 24).padding(.vertical, 12)
-        .background(Color.black).tint(.white)
+            .padding(.horizontal, 18)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.hidden)
+        .background(Color.black)
+        .tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
+        .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
+        .sheet(isPresented: $importing) {
+            RecordingDocumentPicker(
+                onSelected: { url in
+                    importing = false
+                    Task { @MainActor in
+                        do { try await model.importAudio(url, partner: partner.rawValue) }
+                        catch { importError = error.localizedDescription }
+                    }
+                },
+                onCancelled: { importing = false }
+            )
+            .ignoresSafeArea()
+        }
         .fileExporter(isPresented: $exporting, document: document, contentType: .wav,
-                      defaultFilename: "Interpreter-Live-recording") { result in
+                      defaultFilename: "Interpreter-Live-translation") { result in
             if case .failure(let error) = result,
                (error as NSError).code != NSUserCancelledError { exportError = true }
             document = nil
         }
-        .alert("Не удалось сохранить WAV", isPresented: $exportError) { Button("Готово", role: .cancel) {} }
+        .alert("Не удалось сохранить перевод", isPresented: $exportError) {
+            Button("Готово", role: .cancel) {}
+        }
+        .alert("Импорт аудио", isPresented: Binding(
+            get: { importError != nil },
+            set: { if !$0 { importError = nil } }
+        )) {
+            Button("Понятно", role: .cancel) { importError = nil }
+        } message: {
+            Text(importError ?? "")
+        }
         .onAppear { updateAwake() }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false; model.background() }
+        .onDisappear {
+            orbitHide?.cancel()
+            UIApplication.shared.isIdleTimerDisabled = false
+            model.background()
+        }
         .onChange(of: keepAwake) { _, _ in updateAwake() }
         .onChange(of: scenePhase) { _, phase in
             updateAwake()
             if phase != .active { model.background() }
         }
     }
+
+    /// Circular positions keep the selected language at the exact centre.
+    private func cyclicDistance(for choice: PartnerLanguage) -> Int {
+        guard let center = languages.firstIndex(of: partner),
+              let index = languages.firstIndex(of: choice) else { return 0 }
+        let distance = (index - center + languages.count) % languages.count
+        return distance <= languages.count / 2 ? distance : distance - languages.count
+    }
+
+    /// Only the foreign language label captures gestures. Russian never moves.
+    private var languageDrag: some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { value in
+                guard model.phase == .idle else { return }
+                if !orbitStarted {
+                    orbitHide?.cancel()
+                    orbitDragStart = languages.firstIndex(of: partner) ?? 0
+                    orbitStarted = true
+                    withAnimation { orbitActive = true }
+                }
+                let steps = Int((-value.translation.width / 52).rounded())
+                let n = (orbitDragStart + steps % languages.count + languages.count) % languages.count
+                selectLanguage(languages[n])
+            }
+            .onEnded { value in
+                orbitStarted = false
+                scheduleOrbitHide(after: abs(value.translation.width) < 8 ? 3.5 : 0.6)
+            }
+    }
+
+    private func selectLanguage(_ choice: PartnerLanguage) {
+        guard model.phase == .idle else { return }
+        partnerCode = choice.rawValue
+    }
+
+    private func scheduleOrbitHide(after seconds: Double) {
+        orbitHide?.cancel()
+        orbitHide = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            withAnimation { orbitActive = false }
+        }
+    }
+
     private func talk(_ title: String, language: String, target: String) -> some View {
         PressButton(title: title, subtitle: target, pressed: model.held == language,
                     enabled: !model.busy || model.held == language,
-                    begin: { model.begin(language) }, end: { model.end(language) },
-                    cancel: { model.abortPress(language) }).frame(maxWidth: .infinity)
+                    begin: { model.begin(language, partner: partner.rawValue) },
+                    end: { model.end(language) },
+                    cancel: { model.abortPress(language) })
+            .frame(maxWidth: .infinity)
     }
+
     private func updateAwake() {
         UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
+    }
+}
+
+/// Compact, shared balance: live translation and transcription use the SAME LiveSession.
+struct BalanceSummary: View {
+    @ObservedObject var account: LiveSession
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ОСТАТОК · ПРИМЕРНО")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text(account.remainder).font(.title3.monospacedDigit().bold())
+            }
+            Spacer(minLength: 3)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("РАСХОД ПРИЛОЖЕНИЯ")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text(String(format: "$%.4f", account.spent))
+                    .font(.subheadline.monospacedDigit())
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 17))
+        .accessibilityElement(children: .combine)
     }
 }
 
@@ -139,10 +377,16 @@ struct LiveSettings: View {
             Form {
                 Section("Голосовой перевод") {
                     Text("gpt-realtime-translate")
-                    Text("Отдельное приложение для платной модели OpenAI. Подписка ChatGPT и голоса iPhone здесь не используются.").font(.footnote)
+                    Text("Отдельная платная модель OpenAI для голосового перевода.").font(.footnote)
                 }
                 Section("API-ключ") {
-                    Text(model.keySaved ? "Ключ сохранён на этом iPhone" : "Добавь API-ключ OpenAI").font(.footnote)
+                    HStack(spacing: 10) {
+                        Image(systemName: model.keyStatus.symbol)
+                        Text(model.keyStatus.title)
+                    }
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(model.keyVerified ? Color.green :
+                                     model.keyStatusIsRejected ? Color.red : Color.secondary)
                     SecureField("Вставь API-ключ", text: $key)
                         .textContentType(.password).textInputAutocapitalization(.never).autocorrectionDisabled()
                     Button("Вставить из буфера") { key = UIPasteboard.general.string ?? "" }
@@ -155,18 +399,27 @@ struct LiveSettings: View {
                     Text("Ключ хранится в защищённом хранилище iPhone. Старый ключ автоматически не переносится.").font(.footnote)
                 }
                 Section("Баланс API") {
-                    TextField("Текущий баланс в долларах", text: $balance).keyboardType(.decimalPad)
+                    HStack {
+                        Text("Указанный остаток")
+                        Spacer()
+                        Text(model.enteredBalanceText).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("Сейчас · приблизительно")
+                        Spacer()
+                        Text(model.remainder).monospacedDigit().bold()
+                    }
+                    TextField("Обновить остаток, $", text: $balance).keyboardType(.decimalPad)
                     Button("Указать остаток") {
                         notice = model.setBalance(balance) ? "Остаток обновлён" : "Введи сумму, например 9,80"
                         balance = ""
                     }
                     Link("Баланс и расходы OpenAI", destination: URL(string: "https://platform.openai.com/settings/organization/billing/overview")!)
-                    Text("Счётчик приблизительный: $0,034 за минуту отправленного аудио. Он учитывает только это новое приложение. Фактический баланс — на сайте OpenAI. Повторное прослушивание бесплатно.").font(.footnote)
+                    Text("≈ $0,034 за минуту отправленного аудио.").font(.footnote)
                 }
-                Section("Экран") { Toggle("Не гасить экран", isOn: $keepAwake) }
-                Section("Запись") {
-                    Text("Микрофон iPhone: WAV/PCM 24 кГц, моно, до 60 секунд. Каждые 200 мс звук передаётся OpenAI во время разговора. После отпускания отправляется только остаток, затем включается озвучивание перевода.").font(.footnote)
-                    Text("Последняя запись и ответ находятся только в памяти. WAV сохраняется в «Файлы» по твоей кнопке. При уходе из приложения запись, соединение и плеер останавливаются.").font(.footnote)
+                Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
+                Section("Формат передачи аудио") {
+                    Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)
                 }
                 if !notice.isEmpty { Section { Text(notice).font(.footnote) } }
                 Section { Text(liveVersion).foregroundStyle(.secondary) }

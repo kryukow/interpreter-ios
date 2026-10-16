@@ -2,7 +2,7 @@ import Foundation
 
 enum WireError: LocalizedError {
     case invalidRecording, unsupportedRecording, invalidLanguage, invalidResponse
-    case configuration, authorization, quota, rateLimit, connection, timedOut, sending
+    case configuration, authorization, invalidAPIKey, quota, rateLimit, connection, timedOut, sending
 
     var errorDescription: String? {
         switch self {
@@ -11,7 +11,8 @@ enum WireError: LocalizedError {
         case .invalidLanguage: return "Неизвестное направление перевода."
         case .invalidResponse: return "Сервис вернул некорректный ответ."
         case .configuration: return "Сервис не подтвердил модель или язык перевода."
-        case .authorization: return "Проверь API-ключ и доступ к модели в настройках."
+        case .authorization: return "Нет доступа к модели или проекту. Проверь настройки OpenAI."
+        case .invalidAPIKey: return "OpenAI отклонил API-ключ. Вставь новый ключ в настройках."
         case .quota: return "Недостаточно средств API или достигнут лимит проекта."
         case .rateLimit: return "Достигнут лимит запросов. Попробуй позже."
         case .connection: return "Соединение прервалось. Незавершённый ответ не используется."
@@ -120,7 +121,7 @@ enum TranslationWire {
     }
 
     static func configuration(target: String) throws -> String {
-        guard target == "ru" || target == "de" else { throw WireError.invalidLanguage }
+        guard ["ru", "de", "ro", "en", "es", "pl"].contains(target) else { throw WireError.invalidLanguage }
         return try json(["type": "session.update", "session": ["audio": [
             "input": ["noise_reduction": NSNull(), "transcription": NSNull()],
             "output": ["language": target]
@@ -160,7 +161,8 @@ enum TranslationWire {
         case "error":
             let error = object["error"] as? [String: Any]
             switch error?["code"] as? String {
-            case "invalid_api_key", "permission_denied", "model_not_found": return .failure(.authorization)
+            case "invalid_api_key": return .failure(.invalidAPIKey)
+            case "permission_denied", "model_not_found": return .failure(.authorization)
             case "insufficient_quota": return .failure(.quota)
             case "rate_limit_exceeded": return .failure(.rateLimit)
             default: return .failure(.connection)
