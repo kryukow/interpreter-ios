@@ -142,11 +142,12 @@ final class LocalVoiceLab: ObservableObject {
 
     private func stopRecording() {
         guard let audio = recorder else { return }
+        let recordedDuration = audio.currentTime
         audio.stop()
         recorder = nil
         isRecording = false
         try? AVAudioSession.sharedInstance().setActive(false)
-        guard audio.currentTime >= 10 else {
+        guard recordedDuration >= 10 else {
             try? FileManager.default.removeItem(at: audio.url)
             status = "Слишком коротко: нужно хотя бы 10 секунд, лучше 25–30."
             return
@@ -303,12 +304,14 @@ struct LocalVoiceLabView: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("1 · Модель") {
-                    if !engine.modelOnDisk {
-                        Button("Скачать Chatterbox Multilingual") { engine.download() }
-                            .disabled(engine.busy)
-                    } else {
-                        Label("Модель скачана", systemImage: "checkmark.circle")
+                    if engine.modelOnDisk {
+                        Label("Файлы модели найдены", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
+                    }
+                    if !engine.loaded {
+                        Button(engine.modelOnDisk ? "Проверить / докачать модель" : "Скачать Chatterbox Multilingual") {
+                            engine.download()
+                        }.disabled(engine.busy)
                     }
                     if engine.downloading { ProgressView(value: engine.downloadProgress) }
                     if engine.modelOnDisk && !engine.loaded {
