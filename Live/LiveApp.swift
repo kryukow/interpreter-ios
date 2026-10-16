@@ -28,122 +28,200 @@ struct LiveView: View {
     @State private var orbitStarted = false
     @State private var orbitHide: Task<Void, Never>?
     @Environment(\.scenePhase) private var scenePhase
+
     private var partner: PartnerLanguage { PartnerLanguage.current(partnerCode) }
+    private var languages: [PartnerLanguage] { PartnerLanguage.allCases }
+
     var body: some View {
-        VStack(spacing: 16) {
-            HStack {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text("INTERPRETER LIVE").font(.caption2).tracking(3).foregroundStyle(.secondary)
-                    HStack(spacing: 8) {
-                        Text("Русский ↔").font(.title2.bold()).fixedSize()
-                        Text(partner.name)
-                            .font(.title2.bold())
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.75)
-                            .contentShape(Rectangle())
-                            .gesture(languageDrag)
-                            .accessibilityLabel("Иностранный язык: \(partner.name). Проведи влево или вправо")
-                            .accessibilityAddTraits(.isButton)
-                    }
-                }
-                Spacer()
-                Button { model.stopAll(); settings = true } label: {
-                    Image(systemName: "gearshape.fill").font(.title2)
-                }.disabled(model.busy).accessibilityLabel("Настройки")
-            }
-            ZStack {
-                Image(systemName: "infinity")
-                    .font(.system(size: 52, weight: .light))
-                    .opacity(orbitActive ? 0.08 : 1)
-                    .scaleEffect(orbitActive ? 1.45 : 1)
-                VStack(spacing: 6) {
-                    HStack(spacing: 6) {
-                        ForEach(PartnerLanguage.allCases) { choice in
-                            Button {
-                                selectLanguage(choice)
-                                scheduleOrbitHide(after: 0.55)
-                            } label: {
-                                Text(choice.flag)
-                                    .font(.system(size: choice == partner ? 32 : 25))
-                                    .frame(maxWidth: .infinity)
-                                    .frame(height: 51)
-                                    .background(choice == partner ? Color.white : Color.clear,
-                                                in: RoundedRectangle(cornerRadius: 15))
-                                    .opacity(choice == partner ? 1 : 0.50)
-                                    .scaleEffect(choice == partner ? 1.04 : 0.90)
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(choice.name)
+        ScrollView {
+            VStack(spacing: 11) {
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text("INTERPRETER LIVE")
+                            .font(.system(size: 10, weight: .medium))
+                            .tracking(3.2)
+                            .foregroundStyle(.secondary)
+                        HStack(spacing: 7) {
+                            Text("Русский ↔")
+                                .font(.title2.bold())
+                                .fixedSize()
+                            Text(partner.name)
+                                .font(.title2.bold())
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.73)
+                                .contentShape(Rectangle())
+                                .gesture(languageDrag)
+                                .accessibilityLabel("Язык: \(partner.name). Проведи пальцем влево или вправо")
+                                .accessibilityAddTraits(.isButton)
                         }
                     }
-                    Text(partner.flag + " " + partner.name + " · выбрано")
-                        .font(.caption2.weight(.medium))
+                    Spacer(minLength: 6)
+                    Button { model.stopAll(); settings = true } label: {
+                        Image(systemName: "gearshape")
+                            .font(.title2.weight(.medium))
+                            .frame(width: 36, height: 36)
+                    }
+                    .disabled(model.busy)
+                    .accessibilityLabel("Настройки")
+                }
+                .padding(.top, 12)
+
+                ZStack {
+                    Image(systemName: "infinity")
+                        .font(.system(size: 76, weight: .light))
+                        .opacity(orbitActive ? 0.10 : 1)
+                        .scaleEffect(orbitActive ? 1.7 : 1)
+                        .accessibilityHidden(true)
+
+                    ForEach(languages) { choice in
+                        let distance = cyclicDistance(for: choice)
+                        let active = distance == 0
+                        Button {
+                            selectLanguage(choice)
+                            scheduleOrbitHide(after: 0.65)
+                        } label: {
+                            Text(choice.shortCode)
+                                .font(.system(size: active ? 24 : 19, weight: .bold))
+                                .foregroundStyle(active ? Color.black : Color.white)
+                                .frame(width: active ? 65 : 47, height: active ? 58 : 50)
+                                .background(
+                                    active ? Color(white: 0.91) : Color.clear,
+                                    in: RoundedRectangle(cornerRadius: 18)
+                                )
+                                .opacity(active ? 1 : abs(distance) == 1 ? 0.72 : 0.28)
+                                .scaleEffect(active ? 1 : abs(distance) == 1 ? 0.90 : 0.70)
+                        }
+                        .buttonStyle(.plain)
+                        .offset(x: CGFloat(distance) * 70)
+                        .opacity(orbitActive ? 1 : 0)
+                        .allowsHitTesting(orbitActive && model.phase == .idle)
+                        .accessibilityLabel(choice.name)
+                    }
+                    Text("\(partner.shortCode) · \(partner.name) · выбрано")
+                        .font(.caption2.weight(.semibold))
                         .foregroundStyle(.secondary)
+                        .offset(y: 49)
+                        .opacity(orbitActive ? 1 : 0)
                 }
-                .opacity(orbitActive ? 1 : 0)
-                .scaleEffect(orbitActive ? 1 : 0.94)
-                .allowsHitTesting(orbitActive && model.phase == .idle)
-            }
-            .frame(height: 72)
-            .animation(.spring(response: 0.34, dampingFraction: 0.83), value: orbitActive)
-            .sensoryFeedback(.selection, trigger: partnerCode)
-            MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
-            VStack(spacing: 5) {
-                Text(model.message).font(.headline).multilineTextAlignment(.center)
-                if model.phase == .recording {
-                    Text(String(format: "● %.1f с", model.elapsed)).font(.caption.monospacedDigit())
+                .frame(height: 123)
+                .animation(.spring(response: 0.33, dampingFraction: 0.83), value: orbitActive)
+                .animation(.spring(response: 0.29, dampingFraction: 0.85), value: partnerCode)
+                .sensoryFeedback(.selection, trigger: partnerCode)
+
+                MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
+                    .frame(height: 23)
+
+                VStack(spacing: 3) {
+                    Text(model.message == "Удерживай кнопку нужного языка" ? "Готово" : model.message)
+                        .font(.subheadline.weight(.semibold))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                    if model.phase == .recording {
+                        Text(String(format: "● %.1f с", model.elapsed))
+                            .font(.caption.monospacedDigit())
+                    }
                 }
-            }.frame(minHeight: 56)
-            BalanceSummary(account: model)
-            HStack(spacing: 16) {
-                talk("Русский", language: "ru", target: "→ \(partner.uppercaseName)")
-                talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
-            }.frame(height: 145)
-            Text("Держи → вибросигнал → говори → отпусти")
-                .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("ГОЛОСОВОЙ ПЕРЕВОД · API").font(.caption).foregroundStyle(.secondary)
-                    Text(model.text.isEmpty ? "—" : model.text).textSelection(.enabled)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if !model.details.isEmpty { Text(model.details).font(.caption).foregroundStyle(.secondary) }
-                    if let translation = model.translatedWave {
-                        Button("Прослушать снова") { model.replay() }.disabled(model.busy)
-                        Button("Сохранить перевод") {
-                            document = RecordingDocument(data: translation)
-                            exporting = true
-                        }.disabled(model.busy)
-                        if let url = model.shareURL {
-                            ShareLink(item: url, preview: SharePreview("Голосовой перевод")) {
-                                Label("Отправить перевод", systemImage: "square.and.arrow.up")
+                .frame(minHeight: 27)
+
+                BalanceSummary(account: model)
+
+                HStack(spacing: 12) {
+                    talk("Русский", language: "ru", target: "→ \(partner.uppercaseName)")
+                    talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
+                }
+                .frame(height: 136)
+
+                if !model.text.isEmpty || !model.details.isEmpty ||
+                   model.recordedWave != nil || model.translatedWave != nil {
+                    VStack(alignment: .leading, spacing: 11) {
+                        if !model.text.isEmpty {
+                            Text(model.text).font(.subheadline)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        if !model.details.isEmpty {
+                            Text(model.details).font(.caption).foregroundStyle(.secondary)
+                        }
+                        if model.translatedWave != nil {
+                            HStack {
+                                Button("Прослушать") { model.replay() }
+                                Button("Сохранить перевод") {
+                                    if let translated = model.translatedWave {
+                                        document = RecordingDocument(data: translated)
+                                        exporting = true
+                                    }
+                                }
+                                if let url = model.shareURL {
+                                    ShareLink(item: url) { Label("Отправить", systemImage: "square.and.arrow.up") }
+                                }
                             }
+                            .font(.caption)
                             .disabled(model.busy)
                         }
+                        if model.recordedWave != nil {
+                            Button("Послушать свою запись") { model.review() }
+                                .font(.caption)
+                                .disabled(model.busy)
+                        }
                     }
-                    if model.recordedWave != nil {
-                        Button("Послушать свою запись") { model.review() }.disabled(model.busy)
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 16))
+                }
+
+                Button { showTranscription = true } label: {
+                    HStack(spacing: 13) {
+                        Image(systemName: "waveform.badge.mic")
+                            .font(.title2)
+                            .frame(width: 41, height: 41)
+                            .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text("Голос → текст")
+                                .font(.headline)
+                            Text("Транскрибация аудиозаписей")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Image(systemName: "chevron.right")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
                     }
+                    .foregroundStyle(.white)
+                    .padding(13)
+                    .frame(maxWidth: .infinity)
+                    .background(
+                        LinearGradient(colors: [Color(white: 0.14), Color(white: 0.07)],
+                                       startPoint: .leading, endPoint: .trailing),
+                        in: RoundedRectangle(cornerRadius: 18)
+                    )
+                    .overlay(RoundedRectangle(cornerRadius: 18)
+                        .strokeBorder(Color.white.opacity(0.14)))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.busy)
+                .accessibilityHint("Открыть расшифровку аудиозаписей")
+
+                HStack {
                     Button {
                         importing = true
                     } label: {
                         Label("Импорт аудио", systemImage: "square.and.arrow.down")
                     }
                     .disabled(model.busy)
-                    Button {
-                        showTranscription = true
-                    } label: {
-                        Label("Транскрибация записей", systemImage: "text.quote")
-                    }
-                    .disabled(model.busy)
-                    if model.recordedWave == nil {
-                        Text("Онлайн-перевод начинается во время удержания кнопки. После отпускания ждём только оставшуюся часть ответа. Звук микрофона записывается без усиления.")
-                            .font(.footnote).foregroundStyle(.secondary)
-                    }
-                }.padding(18).background(Color(white: 0.055), in: RoundedRectangle(cornerRadius: 22))
-            }.frame(maxHeight: .infinity)
-            Text(liveVersion).font(.caption2).foregroundStyle(.secondary)
-        }.padding(.horizontal, 24).padding(.vertical, 12)
-        .background(Color.black).tint(.white)
+                    Spacer()
+                    Text(liveVersion)
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 18)
+            .padding(.bottom, 14)
+            .frame(maxWidth: .infinity)
+        }
+        .scrollIndicators(.hidden)
+        .background(Color.black)
+        .tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
         .sheet(isPresented: $importing) {
@@ -165,7 +243,9 @@ struct LiveView: View {
                (error as NSError).code != NSUserCancelledError { exportError = true }
             document = nil
         }
-        .alert("Не удалось сохранить перевод", isPresented: $exportError) { Button("Готово", role: .cancel) {} }
+        .alert("Не удалось сохранить перевод", isPresented: $exportError) {
+            Button("Готово", role: .cancel) {}
+        }
         .alert("Импорт аудио", isPresented: Binding(
             get: { importError != nil },
             set: { if !$0 { importError = nil } }
@@ -175,30 +255,44 @@ struct LiveView: View {
             Text(importError ?? "")
         }
         .onAppear { updateAwake() }
-        .onDisappear { UIApplication.shared.isIdleTimerDisabled = false; model.background() }
+        .onDisappear {
+            orbitHide?.cancel()
+            UIApplication.shared.isIdleTimerDisabled = false
+            model.background()
+        }
         .onChange(of: keepAwake) { _, _ in updateAwake() }
         .onChange(of: scenePhase) { _, phase in
             updateAwake()
             if phase != .active { model.background() }
         }
     }
+
+    /// Circular positions keep the selected language at the exact centre.
+    private func cyclicDistance(for choice: PartnerLanguage) -> Int {
+        guard let center = languages.firstIndex(of: partner),
+              let index = languages.firstIndex(of: choice) else { return 0 }
+        let distance = (index - center + languages.count) % languages.count
+        return distance <= languages.count / 2 ? distance : distance - languages.count
+    }
+
+    /// Only the foreign language label captures gestures. Russian never moves.
     private var languageDrag: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard model.phase == .idle else { return }
                 if !orbitStarted {
                     orbitHide?.cancel()
-                    orbitDragStart = PartnerLanguage.allCases.firstIndex(of: partner) ?? 0
+                    orbitDragStart = languages.firstIndex(of: partner) ?? 0
                     orbitStarted = true
                     withAnimation { orbitActive = true }
                 }
-                let offset = Int((-value.translation.width / 57).rounded())
-                let index = min(max(orbitDragStart + offset, 0), PartnerLanguage.allCases.count - 1)
-                selectLanguage(PartnerLanguage.allCases[index])
+                let steps = Int((-value.translation.width / 52).rounded())
+                let n = (orbitDragStart + steps % languages.count + languages.count) % languages.count
+                selectLanguage(languages[n])
             }
             .onEnded { value in
                 orbitStarted = false
-                scheduleOrbitHide(after: abs(value.translation.width) < 8 ? 3.5 : 0.45)
+                scheduleOrbitHide(after: abs(value.translation.width) < 8 ? 3.5 : 0.6)
             }
     }
 
@@ -219,57 +313,40 @@ struct LiveView: View {
     private func talk(_ title: String, language: String, target: String) -> some View {
         PressButton(title: title, subtitle: target, pressed: model.held == language,
                     enabled: !model.busy || model.held == language,
-                    begin: { model.begin(language, partner: partner.rawValue) }, end: { model.end(language) },
-                    cancel: { model.abortPress(language) }).frame(maxWidth: .infinity)
+                    begin: { model.begin(language, partner: partner.rawValue) },
+                    end: { model.end(language) },
+                    cancel: { model.abortPress(language) })
+            .frame(maxWidth: .infinity)
     }
+
     private func updateAwake() {
         UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
     }
 }
 
-/// One visual readout backed by the same LiveSession in both feature screens.
+/// Compact, shared balance: live translation and transcription use the SAME LiveSession.
 struct BalanceSummary: View {
     @ObservedObject var account: LiveSession
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("ОБЩИЙ ОСТАТОК API · ПРИМЕРНО")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Text(account.remainder).font(.title3.monospacedDigit().bold())
-                }
-                Spacer()
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text("ОБЩИЙ РАСХОД")
-                        .font(.caption2).foregroundStyle(.secondary)
-                    Text(String(format: "$%.4f", account.spent))
-                        .font(.subheadline.monospacedDigit())
-                }
+        HStack(alignment: .firstTextBaseline, spacing: 14) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("ОСТАТОК · ПРИМЕРНО")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text(account.remainder).font(.title3.monospacedDigit().bold())
             }
-            Divider().overlay(Color.white.opacity(0.08))
-            HStack {
-                Text("Перевод · новые расходы")
-                Spacer()
-                Text(String(format: "$%.4f", account.translationSpent))
+            Spacer(minLength: 3)
+            VStack(alignment: .trailing, spacing: 4) {
+                Text("РАСХОД ПРИЛОЖЕНИЯ")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Text(String(format: "$%.4f", account.spent))
+                    .font(.subheadline.monospacedDigit())
             }
-            HStack {
-                Text("Транскрибация · новые расходы")
-                Spacer()
-                Text(String(format: "$%.4f", account.transcriptionSpent))
-            }
-            .padding(.bottom, 1)
-            if account.lowBalance {
-                Label("Предполагаемый остаток меньше $1 · проверь баланс OpenAI",
-                      systemImage: "exclamationmark.triangle.fill")
-                    .foregroundStyle(.orange)
-            }
-            Text("Локальная оценка, не банковский баланс. Старые расходы включены в общий итог.")
-                .font(.caption2).foregroundStyle(.tertiary)
         }
-        .font(.caption.monospacedDigit())
-        .padding(16)
-        .background(Color(white: 0.07), in: RoundedRectangle(cornerRadius: 22))
+        .padding(14)
+        .frame(maxWidth: .infinity)
+        .background(Color(white: 0.08), in: RoundedRectangle(cornerRadius: 17))
+        .accessibilityElement(children: .combine)
     }
 }
 
