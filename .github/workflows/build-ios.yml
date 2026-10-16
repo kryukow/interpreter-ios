@@ -12,7 +12,7 @@ concurrency:
 jobs:
   build:
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Test new WAV and dedicated translation protocol
@@ -56,8 +56,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.1.0'
-          assert info['CFBundleVersion'] == '3'
+          assert info['CFBundleShortVersionString'] == '1.1.1'
+          assert info['CFBundleVersion'] == '4'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -65,11 +65,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.1.0-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.1.0-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.1.1-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.1.1-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.1.0-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.1.0-Unsigned.ipa
+          name: Interpreter-Live-1.1.1-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.1.1-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
