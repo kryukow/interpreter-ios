@@ -111,11 +111,11 @@ import Foundation
             let body = String(decoding: payload.httpBody ?? Data(), as: UTF8.self)
             expect(payload.httpMethod == "POST", "Transcription must use POST")
             expect(body.contains(mode.model), "Request used wrong transcription model")
-            expect(body.contains("filename=\\"example.m4a\\""), "Multipart file missing")
+            expect(body.contains(#"filename="example.m4a""#), "Multipart file missing")
             if mode == .group {
                 expect(body.contains("diarized_json") && body.contains("chunking_strategy"),
                        "Speaker mode must request diarized JSON and automatic chunking")
-                let json = Data("{\\"text\\":\\"Hello world\\",\\"segments\\":[{\\"speaker\\":\\"A\\",\\"start\\":0,\\"end\\":1.2,\\"text\\":\\"Hello\\"},{\\"speaker\\":\\"B\\",\\"start\\":1.3,\\"end\\":2,\\"text\\":\\"world\\"}]}".utf8)
+                let json = Data(#"{"text":"Hello world","segments":[{"speaker":"A","start":0,"end":1.2,"text":"Hello"},{"speaker":"B","start":1.3,"end":2,"text":"world"}]}"#.utf8)
                 let transcript = try TranscriptionWire.parse(json, mode: .group)
                 expect(transcript.segments.count == 2, "Speaker annotations missing")
                 expect(transcript.formatted(mode: .group).contains("[00:01] B:"),
@@ -123,7 +123,7 @@ import Foundation
             } else {
                 expect(body.contains("languages[]") && !body.contains("diarized_json"),
                        "Single-speaker multilingual hints were not set")
-                let json = Data("{\\"text\\":\\"Guten Morgen!\\",\\"languages\\":[{\\"code\\":\\"de\\"}]}".utf8)
+                let json = Data(#"{"text":"Guten Morgen!","languages":[{"code":"de"}]}"#.utf8)
                 let transcript = try TranscriptionWire.parse(json, mode: .single)
                 expect(transcript.text == "Guten Morgen!" && transcript.languages == ["de"],
                        "Original language was not preserved")
