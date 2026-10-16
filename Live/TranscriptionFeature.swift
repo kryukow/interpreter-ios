@@ -36,13 +36,20 @@ import UIKit
     var working: Bool { stage == .preparing || stage == .processing }
     var hasIncomplete: Bool { finishedCount > 0 && finishedCount < totalCount }
 
-    func restore() {
+    func restore(account: LiveSession) {
         guard !restored else { return }
         restored = true
         guard let (archive, selection) = TranscriptionArchive.read() else { return }
         prepared = selection
         saved = archive
-        mode = TranscriptionMode(rawValue: archive.mode) ?? .single
+        let restoredMode = TranscriptionMode(rawValue: archive.mode) ?? .single
+        // Crash recovery: a completed part may have been written immediately before
+        // the app was terminated. The ledger's part ID keeps this operation idempotent.
+        for (index, part) in selection.parts.enumerated() where archive.completed[index] != nil {
+            account.addTranscriptionEstimate(restoredMode.price(for: part.seconds),
+                id: archive.folderName + "/" + restoredMode.rawValue + "/" + String(index))
+        }
+        mode = restoredMode
         languageHint = TranscriptionLanguageHint(rawValue: archive.hint) ?? .ru
         filename = archive.filename
         duration = archive.duration
@@ -462,7 +469,7 @@ struct TranscriptionView: View {
             } message: {
                 Text("Модель: \(session.mode.model). Запись: \(durationLabel). Осталось частей: \(session.totalCount - session.finishedCount). Повтор части после тайм-аута может быть списан повторно.")
             }
-            .onAppear { session.restore() }
+            .onAppear { session.restore(account: account) }
             .onDisappear { session.pause() }
         }
         .tint(.white)
