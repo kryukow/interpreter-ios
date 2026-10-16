@@ -24,7 +24,7 @@ import UniformTypeIdentifiers
         reset()
         let token = requestID
         stage = .preparing
-        progress = "Подготавливаю аудиозапись"
+        progress = "Получаю файл из «Файлов» · длинная запись может готовиться несколько минут"
         task = Task {
             do {
                 let selection = try await TranscriptionAudio.prepare(url)
@@ -89,7 +89,9 @@ import UniformTypeIdentifiers
                     completedParts.append(
                         answer.formatted(mode: selectedMode,
                                          partNumber: index + 1,
-                                         showPart: selection.parts.count > 1)
+                                         showPart: selection.parts.count > 1,
+                                         offsetSeconds: selection.parts.prefix(index)
+                                             .reduce(0) { $0 + $1.seconds })
                     )
                     transcript = completedParts.joined(separator: "\n\n")
                 } catch is CancellationError {
