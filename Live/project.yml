@@ -2,6 +2,10 @@ name: InterpreterLive
 options:
   deploymentTarget:
     iOS: '18.4'
+packages:
+  ChatterboxCoreML:
+    url: https://github.com/iliasaz/chatterbox-coreml.git
+    branch: main
 settings:
   base:
     SWIFT_VERSION: '5.0'
@@ -16,6 +20,8 @@ targets:
       - path: .
         excludes: [project.yml, README.md]
       - path: ../App/Assets.xcassets
+    dependencies:
+      - package: ChatterboxCoreML
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.interpreter.live
