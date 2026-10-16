@@ -17,6 +17,46 @@ enum TranscriptionMode: String, CaseIterable, Identifiable {
     }
 }
 
+/// Audio language hints. The diarization model accepts one language only;
+/// multilingual hints are supported by gpt-transcribe.
+enum TranscriptionLanguageHint: String, CaseIterable, Identifiable {
+    case ru, de, en, es, ro, pl, ruDE, ruEN, ruES, ruRO, ruPL, automatic
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .ru: return "Только русский"
+        case .de: return "Только немецкий"
+        case .en: return "Только английский"
+        case .es: return "Только испанский"
+        case .ro: return "Только румынский"
+        case .pl: return "Только польский"
+        case .ruDE: return "Русский + немецкий"
+        case .ruEN: return "Русский + английский"
+        case .ruES: return "Русский + испанский"
+        case .ruRO: return "Русский + румынский"
+        case .ruPL: return "Русский + польский"
+        case .automatic: return "Автоопределение"
+        }
+    }
+    var languages: [String] {
+        switch self {
+        case .ru: return ["ru"]
+        case .de: return ["de"]
+        case .en: return ["en"]
+        case .es: return ["es"]
+        case .ro: return ["ro"]
+        case .pl: return ["pl"]
+        case .ruDE: return ["ru", "de"]
+        case .ruEN: return ["ru", "en"]
+        case .ruES: return ["ru", "es"]
+        case .ruRO: return ["ru", "ro"]
+        case .ruPL: return ["ru", "pl"]
+        case .automatic: return []
+        }
+    }
+    var isMultilingual: Bool { languages.count > 1 }
+}
+
 struct TranscriptSegment: Equatable {
     let speaker: String
     let start: Double
@@ -65,14 +105,15 @@ enum TranscriptWireError: LocalizedError {
 enum TranscriptionWire {
     static let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     static let maxBytes = 25_000_000 // API's 25 MB upload cap, decimal to be safe.
-    static let chunkSeconds = 540.0
+    static let chunkSeconds = 180.0
     static func expectedChunks(durationSeconds: Double) -> Int {
         guard durationSeconds.isFinite, durationSeconds > 0 else { return 0 }
         return Int(ceil(durationSeconds / chunkSeconds))
     }
 
     static func request(file: Data, filename: String, key: String,
-                        mode: TranscriptionMode, boundary: String) throws -> URLRequest {
+                        mode: TranscriptionMode, boundary: String,
+                        hint: TranscriptionLanguageHint = .ru) throws -> URLRequest {
         guard !file.isEmpty else { throw TranscriptWireError.emptyFile }
         guard file.count <= maxBytes else { throw TranscriptWireError.fileTooLarge }
         var request = URLRequest(url: endpoint)
@@ -80,7 +121,7 @@ enum TranscriptionWire {
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         request.setValue("multipart/form-data; boundary=\(boundary)",
                          forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 240
+        request.timeoutInterval = 180
         var body = Data()
         func form(_ name: String, _ value: String) {
             body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
@@ -89,9 +130,15 @@ enum TranscriptionWire {
         if mode == .group {
             form("response_format", "diarized_json")
             form("chunking_strategy", "auto")
+            // Diarization supports singular 'language' only.
+            // For a two-language recording, leave language unset rather than incorrectly
+            // forcing one language and risking unwanted transliteration.
+            if hint.languages.count == 1, let language = hint.languages.first {
+                form("language", language)
+            }
         } else {
-            // Hints, not forced-language translation. A single file may contain code-switching.
-            for language in ["ru", "de", "ro", "en", "pl"] { form("languages[]", language) }
+            // gpt-transcribe accepts languages[], not singular language.
+            for language in hint.languages { form("languages[]", language) }
         }
         let safeName = filename.replacingOccurrences(of: "\"", with: "_")
             .replacingOccurrences(of: "\r", with: "_")
