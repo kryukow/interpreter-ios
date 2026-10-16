@@ -15,6 +15,7 @@ private var liveVersion: String {
 struct LiveView: View {
     @StateObject private var model = LiveSession()
     @State private var settings = false
+    @State private var voiceLab = false
     @State private var exporting = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
@@ -32,6 +33,15 @@ struct LiveView: View {
                     Image(systemName: "gearshape.fill").font(.title2)
                 }.disabled(model.busy).accessibilityLabel("Настройки")
             }
+            Button {
+                model.stopAll()
+                voiceLab = true
+            } label: {
+                Label("Мой голос · эксперимент", systemImage: "waveform.badge.mic")
+                    .font(.footnote.weight(.semibold))
+            }
+            .buttonStyle(.bordered)
+            .disabled(model.busy)
             Image(systemName: "infinity").font(.system(size: 52, weight: .light))
             HStack(spacing: 4) {
                 ForEach(0..<40, id: \.self) { index in
@@ -87,6 +97,7 @@ struct LiveView: View {
         }.padding(.horizontal, 24).padding(.vertical, 12)
         .background(Color.black).tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
+        .sheet(isPresented: $voiceLab) { LocalVoiceLabView() }
         .fileExporter(isPresented: $exporting, document: document, contentType: .wav,
                       defaultFilename: "Interpreter-Live-recording") { result in
             if case .failure(let error) = result,
