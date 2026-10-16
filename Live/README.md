@@ -1,4 +1,4 @@
-# Interpreter Live 1.2.2 (6) — voice sharing, audio import and streamlined settings
+# Interpreter Live 1.3.0 (7) — voice sharing, audio import and streamlined settings
 
 The tappable header «Русский ↔ Deutsch ⇵» opens a compact native iPhone wheel picker.
 Only emoji flags appear in the wheel; swiping up or down changes the language
@@ -93,3 +93,34 @@ mark the key as invalid. The last successful/rejected status persists after
 relaunch for the same key via its SHA-256 fingerprint (no raw key in defaults).
 Replacing or deleting the key clears the status. This does not revalidate
 revoked keys silently; the next actual translation refreshes the indicator.
+
+## File transcription (1.3.0)
+
+Open **Транскрибация записей** from the main screen. This is separate from
+Live translation and never alters its audio streaming or two-button handling.
+The user chooses **Один голос** (gpt-transcribe, $0.0045/minute) for ordinary
+source-language transcripts, or **Несколько голосов**
+(gpt-4o-transcribe-diarize, approx. $0.006/minute) for speaker-labeled
+transcripts with segment times. The second model is scheduled for retirement
+on 2027-02-26; the feature must have a replacement by then.
+
+Pick audio from iOS Files (including Apple Watch Voice Memos saved to Files).
+Before any paid request, display duration, selected model, and approximate
+price, and require a second user confirmation. No auto-upload.
+Files <=25MB with compatible extensions are uploaded directly; larger or
+long files are locally exported to consecutive M4A chunks (<=9min each)
+using AVFoundation, checked against the per-file 25MB limit.
+One chunk is charged at most once per processing attempt; retries are
+explicit user actions. Failed or partial results are shown transparently.
+The UI supports cancel, TXT export, copy, and sharing.
+OpenAI processing is not free and results may contain mistakes. Especially
+for split recordings, speaker A in one chunk may differ from speaker A in
+another chunk. The service receives audio only after the user taps
+Расшифровать and confirms. Results persist until the sheet is closed.
+
+A successful transcription updates the saved OpenAI key's green status
+and app's approximate spent balance; rejected keys turn red. Existing
+gpt-realtime-translate is not modified.
+
+Audio transcription API reference:
+https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
