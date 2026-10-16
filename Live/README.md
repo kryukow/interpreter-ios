@@ -29,3 +29,27 @@ Build: `cd Live && xcodegen generate`, scheme `InterpreterLive`.
 GitHub Actions builds simulator and iPhone unsigned IPA. It is not an
 on-device integration test: latency, audio route and spoken translation must
 be verified on iPhone before treating this version as production-ready.
+
+## Experimental on-device voice cloning (1.1.1, build 4)
+
+The **My Voice · experiment** screen is isolated from the realtime pipeline.
+It uses the external MIT-licensed `iliasaz/chatterbox-coreml` Swift package,
+which converts Resemble AI Chatterbox multilingual into an Apple Silicon runtime.
+The user must explicitly download the large Core ML model to the app's document
+sandbox before first use. No model weights are bundled with the unsigned IPA.
+
+User flow: Download multilingual inference + five cloning encoders → Load →
+record 25–30 seconds or import an audio file → create a local conditioning voice →
+enter Russian or German text → generate, play and share WAV. The voice conditioning
+file is stored under `Documents/VoiceLab`; temporary source recordings are removed
+when the experimental sheet closes. The OpenAI streaming API and its audio playback
+remain unchanged. No audio recording is sent to Hugging Face or the TTS provider.
+
+This is a research preview, not a proven real-time feature. Test download/storage,
+model loading, sound quality, interruptions, thermal performance, and time-to-first-
+audio on an **iPhone 16 Pro** before considering a translation voice switch.
+The app and package have not been verified on real hardware by this change.
+
+Sources and license: https://github.com/iliasaz/chatterbox-coreml
+and https://github.com/resemble-ai/chatterbox (MIT); model files are downloaded
+from https://huggingface.co/iliasaz/chatterbox-multilingual-coreml .
