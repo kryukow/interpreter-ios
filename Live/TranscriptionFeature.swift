@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import UIKit
 
 @MainActor final class TranscriptionSession: ObservableObject {
     enum Stage { case idle, preparing, ready, processing, complete }
@@ -291,23 +292,18 @@ struct TranscriptionView: View {
                     }
                 }
             }
-            // Some Apple Watch/Voice Memos recordings from iCloud Drive are not
-            // advertised by Files as UTType.audio. Permit document selection,
-            // then validate audio in TranscriptionAudio before any API request.
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.item],
-                          allowsMultipleSelection: false) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else {
-                        session.reportError("Файл не выбран.")
-                        return
-                    }
-                    session.selectFile(url)
-                case .failure(let error):
-                    if (error as NSError).code != NSUserCancelledError {
-                        session.reportError(error.localizedDescription)
-                    }
-                }
+            // SwiftUI fileImporter on some real iPhones shows Files but never
+            // returns the selected URL. Use UIKit's copy-mode picker instead.
+            // Audio and data cover M4A (including Apple Watch Voice Memos).
+            .sheet(isPresented: $importing) {
+                RecordingDocumentPicker(
+                    onSelected: { selectedURL in
+                        importing = false
+                        session.selectFile(selectedURL)
+                    },
+                    onCancelled: { importing = false }
+                )
+                .ignoresSafeArea()
             }
             .fileExporter(isPresented: $exporting, document: document,
                           contentType: .plainText,
@@ -333,5 +329,54 @@ struct TranscriptionView: View {
     private var durationLabel: String {
         let seconds = Int(session.duration.rounded())
         return String(format: "%d:%02d", seconds / 60, seconds % 60)
+    }
+}
+
+
+/// A dedicated UIKit picker replaces SwiftUI's fileImporter, which can fail
+/// to dispatch its selection on physical iPhone devices.
+struct RecordingDocumentPicker: UIViewControllerRepresentable {
+    let onSelected: (URL) -> Void
+    let onCancelled: () -> Void
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelected: onSelected, onCancelled: onCancelled)
+    }
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let m4a = UTType(filenameExtension: "m4a")
+        var types: [UTType] = [.audio, .data]
+        if let m4a { types.append(m4a) }
+        let picker = UIDocumentPickerViewController(
+            forOpeningContentTypes: types,
+            asCopy: true
+        )
+        picker.delegate = context.coordinator
+        picker.allowsMultipleSelection = false
+        picker.shouldShowFileExtensions = true
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIDocumentPickerViewController, context: Context) {}
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onSelected: (URL) -> Void
+        let onCancelled: () -> Void
+        init(onSelected: @escaping (URL) -> Void,
+             onCancelled: @escaping () -> Void) {
+            self.onSelected = onSelected
+            self.onCancelled = onCancelled
+        }
+        func documentPicker(_ controller: UIDocumentPickerViewController,
+                            didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else {
+                onCancelled()
+                return
+            }
+            onSelected(url)
+        }
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancelled()
+        }
     }
 }
