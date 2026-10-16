@@ -1,0 +1,147 @@
+import Foundation
+
+/// A clear, user-facing distinction: ordinary transcript or speaker-labelled conversation.
+enum TranscriptionMode: String, CaseIterable, Identifiable {
+    case single, group
+    var id: String { rawValue }
+    var title: String { self == .single ? "Один голос" : "Несколько голосов" }
+    var model: String { self == .single ? "gpt-transcribe" : "gpt-4o-transcribe-diarize" }
+    var pricePerMinute: Double { self == .single ? 0.0045 : 0.006 }
+    var explanation: String {
+        self == .single
+            ? "Обычная расшифровка речи на исходном языке, без разделения участников."
+            : "Диалог или встреча: реплики, примерное время и разные говорящие."
+    }
+    func price(for duration: Double) -> Double {
+        max(0, duration) / 60 * pricePerMinute
+    }
+}
+
+struct TranscriptSegment: Equatable {
+    let speaker: String
+    let start: Double
+    let end: Double
+    let text: String
+}
+
+struct TranscriptResult {
+    let text: String
+    let segments: [TranscriptSegment]
+    let languages: [String]
+
+    func formatted(mode: TranscriptionMode, partNumber: Int = 1,
+                   showPart: Bool = false) -> String {
+        let title = showPart ? "Часть \(partNumber)\n" : ""
+        if mode == .single || segments.isEmpty { return title + text }
+        return title + segments.map { segment in
+            let minutes = Int(max(0, segment.start)) / 60
+            let seconds = Int(max(0, segment.start)) % 60
+            return String(format: "[%02d:%02d] %@: %@", minutes, seconds,
+                          segment.speaker, segment.text)
+        }.joined(separator: "\n\n")
+    }
+}
+
+enum TranscriptWireError: LocalizedError {
+    case fileTooLarge, emptyFile, malformedResponse, noText, invalidKey, access, quota, unavailable,
+         server(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .fileTooLarge: return "Аудиофайл превышает 25 МБ. Нужна сжатая запись или разделение."
+        case .emptyFile: return "Аудиофайл пуст или повреждён."
+        case .malformedResponse: return "OpenAI вернул неожиданный формат результата."
+        case .noText: return "В записи не удалось распознать речь."
+        case .invalidKey: return "OpenAI отклонил API-ключ."
+        case .access: return "Недостаточно прав для выбранной модели OpenAI."
+        case .quota: return "Недостаточно баланса API или достигнут лимит."
+        case .unavailable: return "Нет связи с OpenAI. Проверь интернет и попробуй ещё раз."
+        case .server(let message): return message
+        }
+    }
+}
+
+enum TranscriptionWire {
+    static let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
+    static let maxBytes = 25_000_000 // API's 25 MB upload cap, decimal to be safe.
+
+    static func request(file: Data, filename: String, key: String,
+                        mode: TranscriptionMode, boundary: String) throws -> URLRequest {
+        guard !file.isEmpty else { throw TranscriptWireError.emptyFile }
+        guard file.count <= maxBytes else { throw TranscriptWireError.fileTooLarge }
+        var request = URLRequest(url: endpoint)
+        request.httpMethod = "POST"
+        request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
+        request.setValue("multipart/form-data; boundary=\(boundary)",
+                         forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 240
+        var body = Data()
+        func form(_ name: String, _ value: String) {
+            body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(name)\"\r\n\r\n\(value)\r\n".utf8))
+        }
+        form("model", mode.model)
+        if mode == .group {
+            form("response_format", "diarized_json")
+            form("chunking_strategy", "auto")
+        } else {
+            // Hints, not forced-language translation. A single file may contain code-switching.
+            for language in ["ru", "de", "ro", "en", "pl"] { form("languages[]", language) }
+        }
+        let safeName = filename.replacingOccurrences(of: "\"", with: "_")
+            .replacingOccurrences(of: "\r", with: "_")
+            .replacingOccurrences(of: "\n", with: "_")
+        let mimetype = safeName.lowercased().hasSuffix(".wav") ? "audio/wav" : "audio/mp4"
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"\(safeName)\"\r\nContent-Type: \(mimetype)\r\n\r\n".utf8))
+        body.append(file)
+        body.append(Data("\r\n--\(boundary)--\r\n".utf8))
+        request.httpBody = body
+        return request
+    }
+
+    static func parse(_ data: Data, mode: TranscriptionMode) throws -> TranscriptResult {
+        guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let text = object["text"] as? String else {
+            throw TranscriptWireError.malformedResponse
+        }
+        let segments: [TranscriptSegment]
+        if mode == .group {
+            guard let raw = object["segments"] as? [[String: Any]] else {
+                throw TranscriptWireError.malformedResponse
+            }
+            segments = raw.compactMap { value in
+                guard let text = value["text"] as? String,
+                      let start = value["start"] as? Double,
+                      let end = value["end"] as? Double else { return nil }
+                return TranscriptSegment(speaker: value["speaker"] as? String ?? "Говорящий",
+                                         start: start, end: end, text: text)
+            }
+            guard segments.count == raw.count else { throw TranscriptWireError.malformedResponse }
+        } else {
+            segments = []
+        }
+        let languages = (object["languages"] as? [[String: Any]] ?? [])
+            .compactMap { $0["code"] as? String }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, segments.isEmpty {
+            throw TranscriptWireError.noText
+        }
+        return TranscriptResult(text: text, segments: segments, languages: languages)
+    }
+
+    static func serverError(_ data: Data, status: Int) -> TranscriptWireError {
+        let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        let details = json?["error"] as? [String: Any]
+        let code = details?["code"] as? String ?? ""
+        let message = details?["message"] as? String ?? ""
+        if code == "invalid_api_key" { return .invalidKey }
+        if status == 401 || status == 403 { return .access }
+        if code == "insufficient_quota" { return .quota }
+        if status == 429 { return .server("Лимит запросов OpenAI. Попробуй позже.") }
+        if status == 413 { return .fileTooLarge }
+        // Avoid displaying raw server errors that could contain technical details/secrets.
+        if status == 400 {
+            return .server(message.isEmpty ? "OpenAI не принял формат аудио или параметры запроса."
+                : "OpenAI не принял файл. Проверь формат и длительность.")
+        }
+        return .unavailable
+    }
+}
