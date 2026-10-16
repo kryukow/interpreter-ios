@@ -1,4 +1,4 @@
-# Interpreter Live 1.3.0 (7) — voice sharing, audio import and streamlined settings
+# Interpreter Live 1.3.1 (8) — voice sharing, audio import and streamlined settings
 
 The tappable header «Русский ↔ Deutsch ⇵» opens a compact native iPhone wheel picker.
 Only emoji flags appear in the wheel; swiping up or down changes the language
@@ -124,3 +124,19 @@ gpt-realtime-translate is not modified.
 
 Audio transcription API reference:
 https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create
+
+## Long-file picker fix (1.3.1)
+
+The transcription sheet now uses a legible dark neutral «Выбрать аудиозапись»
+button. Files selection no longer rejects Voice Memos/iCloud documents solely
+because a third-party file provider did not mark their UTType as audio.
+Audio filename extensions are checked before attempting local decoding.
+Security-scoped document reads are coordinated through NSFileCoordinator,
+outside the main actor, so a 65-minute recording can download/copy without
+blocking the screen. An explicit status message is shown while preparing.
+65 minutes is processed in eight parts of at most 9 minutes each.
+Diarized timestamps are offset to the real elapsed position, while speaker
+IDs between separate parts may still represent different people.
+
+Selection and conversion are free and local; sending audio to OpenAI begins
+only after tapping «Расшифровать» and confirming the estimated price.
