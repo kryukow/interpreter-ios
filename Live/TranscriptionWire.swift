@@ -30,12 +30,13 @@ struct TranscriptResult {
     let languages: [String]
 
     func formatted(mode: TranscriptionMode, partNumber: Int = 1,
-                   showPart: Bool = false) -> String {
+                   showPart: Bool = false, offsetSeconds: Double = 0) -> String {
         let title = showPart ? "Часть \(partNumber)\n" : ""
         if mode == .single || segments.isEmpty { return title + text }
         return title + segments.map { segment in
-            let minutes = Int(max(0, segment.start)) / 60
-            let seconds = Int(max(0, segment.start)) % 60
+            let absolute = Int(max(0, segment.start + offsetSeconds))
+            let minutes = absolute / 60
+            let seconds = absolute % 60
             return String(format: "[%02d:%02d] %@: %@", minutes, seconds,
                           segment.speaker, segment.text)
         }.joined(separator: "\n\n")
@@ -64,6 +65,11 @@ enum TranscriptWireError: LocalizedError {
 enum TranscriptionWire {
     static let endpoint = URL(string: "https://api.openai.com/v1/audio/transcriptions")!
     static let maxBytes = 25_000_000 // API's 25 MB upload cap, decimal to be safe.
+    static let chunkSeconds = 540.0
+    static func expectedChunks(durationSeconds: Double) -> Int {
+        guard durationSeconds.isFinite, durationSeconds > 0 else { return 0 }
+        return Int(ceil(durationSeconds / chunkSeconds))
+    }
 
     static func request(file: Data, filename: String, key: String,
                         mode: TranscriptionMode, boundary: String) throws -> URLRequest {
