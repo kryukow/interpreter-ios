@@ -276,6 +276,8 @@ struct TranscriptionView: View {
                             .font(.subheadline)
                     }
 
+                    BalanceSummary(account: account)
+
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Сколько людей разговаривает?").font(.headline)
                         Picker("Режим", selection: $session.mode) {
@@ -283,7 +285,7 @@ struct TranscriptionView: View {
                             Text("Несколько голосов").tag(TranscriptionMode.group)
                         }
                         .pickerStyle(.segmented)
-                        .disabled(session.working)
+                        .disabled(session.working || session.finishedCount > 0)
                         Text(session.mode.explanation)
                             .font(.footnote)
                             .foregroundStyle(.secondary)
@@ -298,6 +300,21 @@ struct TranscriptionView: View {
                             Text("Говорящие обозначаются буквами. Если длинный файл разделён, буквы могут начинаться заново в каждой части.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                        Divider()
+                        Text("Какие языки звучат в записи?").font(.headline)
+                        Picker("Подсказка языка", selection: $session.languageHint) {
+                            ForEach(TranscriptionLanguageHint.allCases) { hint in
+                                Text(hint.label).tag(hint)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .tint(.white)
+                        .disabled(session.working || session.finishedCount > 0)
+                        Text(session.mode == .group && session.languageHint.isMultilingual
+                             ? "В режиме нескольких голосов OpenAI принимает подсказку только одного языка. Для пары языков оставляем автоопределение."
+                             : "Подсказка помогает сохранить язык оригинала. Это расшифровка, не перевод.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(16)
                     .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 20))
@@ -324,7 +341,7 @@ struct TranscriptionView: View {
                             HStack {
                                 Text(durationLabel)
                                 Spacer()
-                                Text(String(format: "Примерно $%.3f", session.estimatedPrice))
+                                Text(String(format: "Осталось ≈ $%.3f", session.remainingPrice))
                                     .bold().monospacedDigit()
                             }
                             .font(.subheadline)
@@ -336,6 +353,17 @@ struct TranscriptionView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+                        if session.totalCount > 0 {
+                            ProgressView(value: Double(session.finishedCount), total: Double(session.totalCount))
+                                .tint(.green)
+                            Text("Готово: \(session.finishedCount) из \(session.totalCount)")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        if session.uncertainCount > 0 {
+                            Label("Неопределённых по оплате запросов: \(session.uncertainCount). Перед повтором проверь баланс OpenAI.",
+                                  systemImage: "exclamationmark.circle")
+                                .font(.caption).foregroundStyle(.orange)
+                        }
                         if let error = session.errorMessage {
                             Label(error, systemImage: "exclamationmark.triangle")
                                 .font(.footnote).foregroundStyle(.red)
@@ -344,12 +372,19 @@ struct TranscriptionView: View {
                         Button {
                             showConfirmation = true
                         } label: {
-                            Label("Расшифровать", systemImage: "text.alignleft")
+                            Label(session.hasIncomplete ? "Продолжить с неготовой части" : "Расшифровать",
+                                  systemImage: "text.alignleft")
                                 .frame(maxWidth: .infinity)
                                 .padding(10)
                         }
                         .buttonStyle(.bordered)
                         .disabled(!session.ready)
+                        if !session.filename.isEmpty && !session.working {
+                            Button("Удалить сохранённую запись и результат", role: .destructive) {
+                                session.clearSaved()
+                            }
+                            .font(.footnote)
+                        }
                         Text("Списание происходит через твой API-ключ OpenAI. Итоговая сумма может отличаться от предварительной оценки.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
@@ -395,7 +430,7 @@ struct TranscriptionView: View {
                 }
                 if session.working {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button("Отменить") { session.reset() }
+                        Button("Приостановить") { session.pause() }
                     }
                 }
             }
@@ -420,14 +455,15 @@ struct TranscriptionView: View {
             .confirmationDialog("Отправить аудио в OpenAI?",
                                 isPresented: $showConfirmation,
                                 titleVisibility: .visible) {
-                Button(String(format: "Расшифровать · ≈ $%.3f", session.estimatedPrice)) {
+                Button(String(format: "Обработать неготовые части · ≈ $%.3f", session.remainingPrice)) {
                     session.start(account: account)
                 }
                 Button("Отмена", role: .cancel) {}
             } message: {
-                Text("Модель: \(session.mode.model). Запись: \(durationLabel). Отправка платная.")
+                Text("Модель: \(session.mode.model). Запись: \(durationLabel). Осталось частей: \(session.totalCount - session.finishedCount). Повтор части после тайм-аута может быть списан повторно.")
             }
-            .onDisappear { session.reset() }
+            .onAppear { session.restore() }
+            .onDisappear { session.pause() }
         }
         .tint(.white)
         .preferredColorScheme(.dark)
