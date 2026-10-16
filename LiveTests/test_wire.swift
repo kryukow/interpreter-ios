@@ -51,7 +51,7 @@ import Foundation
         for shift in 0..<4 { decorated[4 + shift] = UInt8((riffSize >> (shift * 8)) & 255) }
         expect(try WavePCM.decode(decorated) == pcm, "Metadata scan changed PCM")
 
-        expect(PartnerLanguage.allCases.map(\.rawValue) == ["de", "ro", "en", "pl"],
+        expect(PartnerLanguage.allCases.map(\.rawValue) == ["de", "en", "es", "ro", "pl"],
                "Unexpected partner languages")
         expect(PartnerLanguage.current("unknown") == .de, "Unsupported saved language must fall back to German")
         for partner in PartnerLanguage.allCases {
@@ -60,7 +60,7 @@ import Foundation
             expect(partner.outputCode(whenSourceIsRussian: false) == "ru",
                    "Partner must always translate to Russian")
         }
-        for target in ["ru", "de", "ro", "en", "pl"] {
+        for target in ["ru", "de", "ro", "en", "es", "pl"] {
             let config = try JSONSerialization.jsonObject(with: Data(TranslationWire.configuration(target: target).utf8)) as! [String: Any]
             expect(config["type"] as? String == "session.update", "Wrong config event")
             let session = config["session"] as! [String: Any]
@@ -99,8 +99,8 @@ import Foundation
             // A permissions error does not prove the secret was incorrect.
         } else { fatalError("Missing model permission must not mark key invalid") }
         // New recorded-audio transcription modes must never be mixed up.
-        expect(TranscriptionWire.expectedChunks(durationSeconds: 65 * 60) == 8,
-               "65-minute Watch recording must be split into eight chunks")
+        expect(TranscriptionWire.expectedChunks(durationSeconds: 65 * 60) == 22,
+               "65-minute Watch recording must be split into short chunks")
         expect(TranscriptionWire.expectedChunks(durationSeconds: 60) == 1,
                "Short recordings must not be split")
         expect(TranscriptionWire.expectedChunks(durationSeconds: 0) == 0,
@@ -119,6 +119,8 @@ import Foundation
             expect(body.contains(mode.model), "Request used wrong transcription model")
             expect(body.contains(#"filename="example.m4a""#), "Multipart file missing")
             if mode == .group {
+                expect(body.contains("name=\\"language\\"") && body.contains("ru"),
+                       "Diarization language should be pinned to Russian by default")
                 expect(body.contains("diarized_json") && body.contains("chunking_strategy"),
                        "Speaker mode must request diarized JSON and automatic chunking")
                 let json = Data(#"{"text":"Hello world","segments":[{"speaker":"A","start":0,"end":1.2,"text":"Hello"},{"speaker":"B","start":1.3,"end":2,"text":"world"}]}"#.utf8)
@@ -138,6 +140,26 @@ import Foundation
                        "Original language was not preserved")
             }
         }
+
+        // Single-language and bilingual hints map to distinct API fields.
+        let singleRU = try TranscriptionWire.request(
+            file: Data([1,2]), filename: "ru.m4a", key: "test",
+            mode: .single, boundary: "H", hint: .ru)
+        let ruBody = String(decoding: singleRU.httpBody ?? Data(), as: UTF8.self)
+        expect(ruBody.contains("languages[]") && !ruBody.contains("language\\""),
+               "gpt-transcribe must send the plural languages[]")
+        let mixed = try TranscriptionWire.request(
+            file: Data([1,2]), filename: "mixed.m4a", key: "test",
+            mode: .single, boundary: "H", hint: .ruES)
+        let mixedBody = String(decoding: mixed.httpBody ?? Data(), as: UTF8.self)
+        expect(mixedBody.contains("ru") && mixedBody.contains("es"),
+               "Russian-Spanish bilingual hint was not sent")
+        let groupMix = try TranscriptionWire.request(
+            file: Data([1,2]), filename: "mixed.m4a", key: "test",
+            mode: .group, boundary: "H", hint: .ruEN)
+        let groupBody = String(decoding: groupMix.httpBody ?? Data(), as: UTF8.self)
+        expect(!groupBody.contains("languages[]") && !groupBody.contains("name=\\"language\\""),
+               "Diarization does not support bilingual hint lists")
         rejected({ _ = try TranscriptionWire.request(
             file: Data(repeating: 1, count: TranscriptionWire.maxBytes + 1),
             filename: "big.m4a", key: "sk-test", mode: .single, boundary: "B") },
