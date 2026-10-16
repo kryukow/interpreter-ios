@@ -112,6 +112,7 @@ import UniformTypeIdentifiers
         }
     }
 
+    func reportError(_ message: String) { errorMessage = message }
     func reset() {
         requestID = UUID()
         task?.cancel()
@@ -125,5 +126,194 @@ import UniformTypeIdentifiers
         transcript = ""
         detectedLanguages = []
         errorMessage = nil
+    }
+}
+
+struct TranscriptTextDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText] }
+    let content: String
+    init(content: String) { self.content = content }
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents,
+              let content = String(data: data, encoding: .utf8) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        self.content = content
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: Data(content.utf8))
+    }
+}
+
+struct TranscriptionView: View {
+    @ObservedObject var account: LiveSession
+    @StateObject private var session = TranscriptionSession()
+    @Environment(\.dismiss) private var dismiss
+    @State private var importing = false
+    @State private var showConfirmation = false
+    @State private var exporting = false
+    @State private var document: TranscriptTextDocument?
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Label("Транскрибация", systemImage: "waveform.badge.mic")
+                            .font(.title2.bold())
+                        Text("Преврати запись с Apple Watch, диктофона или из WhatsApp в текст.")
+                            .foregroundStyle(.secondary)
+                            .font(.subheadline)
+                    }
+
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Сколько людей разговаривает?").font(.headline)
+                        Picker("Режим", selection: $session.mode) {
+                            Text("Один голос").tag(TranscriptionMode.single)
+                            Text("Несколько голосов").tag(TranscriptionMode.group)
+                        }
+                        .pickerStyle(.segmented)
+                        .disabled(session.working)
+                        Text(session.mode.explanation)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            Text(session.mode.model).font(.caption.monospaced())
+                            Spacer()
+                            Text(String(format: "≈ $%.4f/мин", session.mode.pricePerMinute))
+                                .font(.caption.monospacedDigit())
+                        }
+                        .foregroundStyle(.secondary)
+                        if session.mode == .group {
+                            Text("Говорящие обозначаются буквами. Если длинный файл разделён, буквы могут начинаться заново в каждой части.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(16)
+                    .background(Color(white: 0.09), in: RoundedRectangle(cornerRadius: 20))
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        Button {
+                            importing = true
+                        } label: {
+                            Label(session.filename.isEmpty ? "Выбрать аудиофайл" : "Выбрать другой файл",
+                                  systemImage: "doc.badge.plus")
+                                .frame(maxWidth: .infinity)
+                                .padding(12)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(session.working)
+
+                        if !session.filename.isEmpty {
+                            Text(session.filename).font(.subheadline).lineLimit(2)
+                            HStack {
+                                Text(durationLabel)
+                                Spacer()
+                                Text(String(format: "Примерно $%.3f", session.estimatedPrice))
+                                    .bold().monospacedDigit()
+                            }
+                            .font(.subheadline)
+                        }
+                        if !session.progress.isEmpty {
+                            HStack(spacing: 8) {
+                                if session.working { ProgressView().tint(.white) }
+                                Text(session.progress).font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if let error = session.errorMessage {
+                            Label(error, systemImage: "exclamationmark.triangle")
+                                .font(.footnote).foregroundStyle(.red)
+                        }
+
+                        Button {
+                            showConfirmation = true
+                        } label: {
+                            Label("Расшифровать", systemImage: "text.alignleft")
+                                .frame(maxWidth: .infinity)
+                                .padding(10)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(!session.ready)
+                        Text("Списание происходит через твой API-ключ OpenAI. Итоговая сумма может отличаться от предварительной оценки.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .padding(16)
+                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 20))
+
+                    if !session.transcript.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Результат").font(.headline)
+                            if !session.detectedLanguages.isEmpty {
+                                Text("Языки: " + session.detectedLanguages.joined(separator: ", "))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Text(session.transcript)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            HStack {
+                                Button("Копировать") {
+                                    UIPasteboard.general.string = session.transcript
+                                }
+                                Button("Сохранить TXT") {
+                                    document = TranscriptTextDocument(content: session.transcript)
+                                    exporting = true
+                                }
+                                ShareLink(item: session.transcript) {
+                                    Label("Отправить", systemImage: "square.and.arrow.up")
+                                }
+                            }
+                            .font(.footnote)
+                        }
+                        .padding(16)
+                        .background(Color(white: 0.085), in: RoundedRectangle(cornerRadius: 20))
+                    }
+                }
+                .padding(18)
+            }
+            .background(Color.black)
+            .navigationTitle("Аудиозаписи")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Готово") { dismiss() }
+                }
+                if session.working {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Отменить") { session.reset() }
+                    }
+                }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.audio]) { result in
+                switch result {
+                case .success(let url): session.selectFile(url)
+                case .failure(let error):
+                    session.reportError(error.localizedDescription)
+                }
+            }
+            .fileExporter(isPresented: $exporting, document: document,
+                          contentType: .plainText,
+                          defaultFilename: "Interpreter-Transcription") { _ in
+                document = nil
+            }
+            .confirmationDialog("Отправить аудио в OpenAI?",
+                                isPresented: $showConfirmation,
+                                titleVisibility: .visible) {
+                Button(String(format: "Расшифровать · ≈ $%.3f", session.estimatedPrice)) {
+                    session.start(account: account)
+                }
+                Button("Отмена", role: .cancel) {}
+            } message: {
+                Text("Модель: \(session.mode.model). Запись: \(durationLabel). Отправка платная.")
+            }
+            .onDisappear { session.reset() }
+        }
+        .tint(.white)
+        .preferredColorScheme(.dark)
+    }
+
+    private var durationLabel: String {
+        let seconds = Int(session.duration.rounded())
+        return String(format: "%d:%02d", seconds / 60, seconds % 60)
     }
 }
