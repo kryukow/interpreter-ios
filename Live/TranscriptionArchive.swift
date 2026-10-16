@@ -57,6 +57,10 @@ enum TranscriptionArchive {
 
     static func remove(_ saved: SavedTranscriptJob) {
         try? FileManager.default.removeItem(at: index)
+        removeAudioOnly(saved)
+    }
+
+    static func removeAudioOnly(_ saved: SavedTranscriptJob) {
         let folder = support.appendingPathComponent(saved.folderName, isDirectory: true)
         if folder.lastPathComponent.hasPrefix("Interpreter-Transcript-") {
             try? FileManager.default.removeItem(at: folder)
