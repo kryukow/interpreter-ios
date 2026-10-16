@@ -167,18 +167,18 @@ struct LiveView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(Color(white: 0.075))
         }
-        .fileImporter(isPresented: $importing, allowedContentTypes: [.audio, .wav]) { result in
-            switch result {
-            case .success(let url):
-                Task { @MainActor in
-                    do { try await model.importAudio(url, partner: partner.rawValue) }
-                    catch { importError = error.localizedDescription }
-                }
-            case .failure(let error):
-                if (error as NSError).code != NSUserCancelledError {
-                    importError = error.localizedDescription
-                }
-            }
+        .sheet(isPresented: $importing) {
+            RecordingDocumentPicker(
+                onSelected: { url in
+                    importing = false
+                    Task { @MainActor in
+                        do { try await model.importAudio(url, partner: partner.rawValue) }
+                        catch { importError = error.localizedDescription }
+                    }
+                },
+                onCancelled: { importing = false }
+            )
+            .ignoresSafeArea()
         }
         .fileExporter(isPresented: $exporting, document: document, contentType: .wav,
                       defaultFilename: "Interpreter-Live-translation") { result in
