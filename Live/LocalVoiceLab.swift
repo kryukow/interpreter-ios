@@ -33,7 +33,7 @@ final class LocalVoiceLab: ObservableObject {
     private var player: AVAudioPlayer?
     private var task: Task<Void, Never>?
     private var activeOperation: Operation = .idle
-    private enum Operation { case idle, downloading, loading, cloning, speaking }
+    private enum Operation: Equatable { case idle, downloading, loading, cloning, speaking }
 
     init() {
         modelOnDisk = ModelRepository.existingModelDirectory(
