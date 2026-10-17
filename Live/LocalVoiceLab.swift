@@ -8,7 +8,7 @@ import ChatterboxCoreML
 /// The model weights are downloaded from Hugging Face only after a user tap.
 @MainActor
 final class LocalVoiceLab: ObservableObject {
-    @Published private(set) var status = "Эксперимент: переводчик не изменён."
+    @Published private(set) var status = "Готово к работе."
     @Published private(set) var busy = false
     @Published private(set) var downloading = false
     @Published private(set) var downloadProgress: Double = 0
@@ -32,6 +32,8 @@ final class LocalVoiceLab: ObservableObject {
     private var referenceURL: URL?
     private var player: AVAudioPlayer?
     private var task: Task<Void, Never>?
+    private var activeOperation: Operation = .idle
+    private enum Operation { case idle, downloading, loading, cloning, speaking }
 
     init() {
         modelOnDisk = ModelRepository.existingModelDirectory(
@@ -42,12 +44,17 @@ final class LocalVoiceLab: ObservableObject {
     func download() {
         guard !busy else { return }
         busy = true
+        activeOperation = .downloading
         downloading = true
         downloadProgress = 0
         status = "Скачиваю Core ML модель и энкодеры голоса…"
         task = Task { [weak self] in
             guard let self else { return }
-            defer { self.busy = false; self.downloading = false }
+            defer {
+                self.busy = false
+                self.downloading = false
+                self.activeOperation = .idle
+            }
             do {
                 try FileManager.default.createDirectory(at: Self.home, withIntermediateDirectories: true)
                 let result = try await ModelRepository.download(
@@ -74,27 +81,44 @@ final class LocalVoiceLab: ObservableObject {
         }
     }
 
-    func load() {
-        guard !busy, modelOnDisk else { return }
+    /// Prepares an existing on-device model without accessing the microphone
+    /// or the paid realtime translation API. Explicit loading uses the same
+    /// cache, so the screen and the home page never load duplicate instances.
+    func warmupIfAvailable() {
+        guard modelOnDisk, hasVoice, !loaded, !busy else { return }
+        load(silent: true)
+    }
+
+    func load(silent: Bool = false) {
+        guard !busy, !loaded, modelOnDisk else { return }
         guard let directory = ModelRepository.existingModelDirectory(
             hfHome: Self.home, repoId: Self.repository)
         else { status = "Сначала скачай модель."; return }
         busy = true
-        status = "Подготавливаю Core ML (первый запуск может быть долгим)…"
-        task = Task { [weak self] in
+        activeOperation = .loading
+        let hadLoadedBefore = UserDefaults.standard.bool(forKey: "live.voiceModelLoadedBefore")
+        status = hadLoadedBefore
+            ? "Восстанавливаю модель из локального кэша…"
+            : "Первая подготовка модели может занять некоторое время…"
+        task = Task(priority: silent ? .utility : .userInitiated) { [weak self] in
             guard let self else { return }
-            defer { self.busy = false }
+            defer {
+                self.busy = false
+                self.activeOperation = .idle
+            }
             do {
                 let stress = await RuAccentStress.makeOrFallback(
                     downloadHFHome: Self.home, hfToken: nil)
+                try Task.checkCancellation()
                 let loadedModel = try await ChatterboxCoreMLModel.load(
                     from: directory, russianStress: stress)
                 try Task.checkCancellation()
                 self.model = loadedModel
                 self.loaded = true
-                self.status = "Модель готова. Для копии голоса используется до 20 секунд речи."
+                UserDefaults.standard.set(true, forKey: "live.voiceModelLoadedBefore")
+                self.status = "Модель готова."
             } catch is CancellationError {
-                self.status = "Загрузка модели отменена."
+                self.status = "Подготовка модели остановлена."
             } catch {
                 self.loaded = false
                 self.status = "Не удалось загрузить модель: \(error.localizedDescription)"
@@ -214,10 +238,14 @@ final class LocalVoiceLab: ObservableObject {
                 hfHome: Self.home, repoId: Self.repository)
         else { status = "Сначала загрузи модель и запиши голос."; return }
         busy = true
+        activeOperation = .cloning
         status = "Создаю локальную копию голоса…"
         task = Task { [weak self] in
             guard let self else { return }
-            defer { self.busy = false }
+            defer {
+                self.busy = false
+                self.activeOperation = .idle
+            }
             do {
                 try FileManager.default.createDirectory(at: Self.home, withIntermediateDirectories: true)
                 let destination = Self.voiceURL
@@ -243,6 +271,7 @@ final class LocalVoiceLab: ObservableObject {
                     return prepared.clipped
                 }.value
                 self.hasVoice = true
+                self.removeOldReference()
                 self.status = clipped
                     ? "Голос создан из первых 20 секунд. Теперь можно озвучивать текст."
                     : "Голос создан. Выбери язык и нажми «Озвучить»."
@@ -260,13 +289,17 @@ final class LocalVoiceLab: ObservableObject {
             return
         }
         busy = true
+        activeOperation = .speaking
         outputURL = nil
         player?.stop()
         player = nil
         status = "Синтезирую речь локально…"
         task = Task { [weak self] in
             guard let self else { return }
-            defer { self.busy = false }
+            defer {
+                self.busy = false
+                self.activeOperation = .idle
+            }
             do {
                 let options = GenerationOptions.multilingual(
                     language: language, exaggeration: 0.5, cfgWeight: 0.5)
@@ -301,6 +334,7 @@ final class LocalVoiceLab: ObservableObject {
                 try FileManager.default.removeItem(at: Self.voiceURL)
             }
             hasVoice = false
+            removeOldReference()
             outputURL = nil
             stopPlayback()
             status = "Сохранённая копия голоса удалена с iPhone."
@@ -310,7 +344,12 @@ final class LocalVoiceLab: ObservableObject {
     }
 
     func cleanup() {
-        task?.cancel()
+        // Closing the voice sheet must not discard an already warming model.
+        // Cancel interactive generation, but let passive model preparation
+        // finish while the parent Interpreter Live screen is still active.
+        if activeOperation == .speaking || activeOperation == .cloning {
+            task?.cancel()
+        }
         stopPlayback()
         recordingClock?.cancel()
         recordingClock = nil
@@ -345,7 +384,7 @@ final class LocalVoiceLab: ObservableObject {
 
 struct LocalVoiceLabView: View {
     @Environment(\.dismiss) private var dismiss
-    @StateObject private var engine = LocalVoiceLab()
+    @ObservedObject var engine: LocalVoiceLab
     @State private var language = "ru"
     @State private var phrase = VoiceSynthesisLanguage.sample(for: "ru") ?? ""
     @FocusState private var textEditorFocused: Bool
@@ -357,53 +396,82 @@ struct LocalVoiceLabView: View {
             Form {
                 Section("Модель") {
                     if engine.modelOnDisk {
-                        Label("Файлы модели найдены", systemImage: "checkmark.circle")
-                            .foregroundStyle(.green)
+                        VStack(alignment: .leading, spacing: 0) {
+                            HStack(spacing: 13) {
+                                Image(systemName: "checkmark.circle")
+                                    .foregroundStyle(.green)
+                                    .font(.title3)
+                                    .frame(width: 24)
+                                Text("Файлы модели найдены")
+                                    .foregroundStyle(.green)
+                            }
+                            HStack {
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(engine.loaded ? Color.green : Color.secondary.opacity(0.35))
+                                    .frame(width: 3, height: 23)
+                                    .padding(.leading, 10)
+                                Spacer()
+                            }
+                            HStack(spacing: 13) {
+                                Image(systemName: engine.loaded ? "checkmark.circle" : "circle.dotted")
+                                    .foregroundStyle(engine.loaded ? Color.green : Color.secondary)
+                                    .font(.title3)
+                                    .frame(width: 24)
+                                Text(engine.loaded ? "Модель готова" : "Ожидает подготовки")
+                                    .foregroundStyle(engine.loaded ? Color.green : Color.secondary)
+                            }
+                        }
+                        .accessibilityElement(children: .combine)
+                        .padding(.vertical, 4)
                     }
-                    if !engine.loaded {
-                        Button(engine.modelOnDisk ? "Проверить / докачать модель" : "Скачать Chatterbox Multilingual") {
-                            engine.download()
-                        }.disabled(engine.busy)
+                    if !engine.modelOnDisk {
+                        Button("Скачать Chatterbox Multilingual") { engine.download() }
+                            .disabled(engine.busy)
                     }
                     if engine.downloading { ProgressView(value: engine.downloadProgress) }
                     if engine.modelOnDisk && !engine.loaded {
-                        Button("Загрузить модель") { engine.load() }.disabled(engine.busy)
+                        if engine.busy {
+                            ProgressView("Подготавливаю модель…")
+                        } else {
+                            Button("Загрузить модель") { engine.load() }
+                        }
                     }
-                    if engine.loaded { Label("Модель готова", systemImage: "checkmark.circle").foregroundStyle(.green) }
                 }
                 Section("Мой голос") {
-                    Button(engine.isRecording ? "Остановить запись" : "Записать мой голос") {
-                        textEditorFocused = false
-                        engine.startOrStopRecording()
-                    }.disabled(engine.busy)
-                    if engine.isRecording {
-                        VStack(alignment: .leading, spacing: 7) {
-                            HStack {
-                                Label("Запись", systemImage: "record.circle")
-                                    .foregroundStyle(.red)
-                                Spacer()
-                                Text(String(format: "%02d:%02d / 00:30",
-                                            Int(engine.recordingElapsed) / 60,
-                                            Int(engine.recordingElapsed) % 60))
-                                    .monospacedDigit()
+                    if !engine.hasVoice {
+                        Button(engine.isRecording ? "Остановить запись" : "Записать мой голос") {
+                            textEditorFocused = false
+                            engine.startOrStopRecording()
+                        }.disabled(engine.busy)
+                        if engine.isRecording {
+                            VStack(alignment: .leading, spacing: 7) {
+                                HStack {
+                                    Label("Запись", systemImage: "record.circle")
+                                        .foregroundStyle(.red)
+                                    Spacer()
+                                    Text(String(format: "%02d:%02d / 00:30",
+                                                Int(engine.recordingElapsed) / 60,
+                                                Int(engine.recordingElapsed) % 60))
+                                        .monospacedDigit()
+                                }
+                                .font(.subheadline.weight(.semibold))
+                                ProgressView(value: engine.recordingElapsed,
+                                             total: LocalVoiceLab.recordingLimit)
+                                    .tint(.red)
                             }
-                            .font(.subheadline.weight(.semibold))
-                            ProgressView(value: engine.recordingElapsed,
-                                         total: LocalVoiceLab.recordingLimit)
-                                .tint(.red)
+                            .accessibilityElement(children: .combine)
                         }
-                        .accessibilityElement(children: .combine)
-                    }
-                    Button("Импортировать аудиофайл") { importing = true }
-                        .disabled(engine.busy || engine.isRecording)
-                    if engine.hasReference {
-                        Label("Образец подготовлен", systemImage: "checkmark.circle")
-                            .foregroundStyle(.green)
-                        Button("Создать мой голос") { engine.clone() }
-                            .disabled(engine.busy || !engine.loaded)
-                    }
-                    if engine.hasVoice {
-                        Label("Копия голоса сохранена на iPhone", systemImage: "checkmark.circle")
+                        Button("Импортировать аудиофайл") { importing = true }
+                            .disabled(engine.busy || engine.isRecording)
+                        if engine.hasReference {
+                            Label("Образец подготовлен", systemImage: "checkmark.circle")
+                                .foregroundStyle(.green)
+                            Button("Создать мой голос") { engine.clone() }
+                                .disabled(engine.busy || !engine.loaded)
+                        }
+                    } else {
+                        Label("Копия голоса сохранена на iPhone",
+                              systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
                         Button("Удалить мою копию голоса", role: .destructive) {
                             confirmingVoiceDeletion = true
@@ -441,6 +509,16 @@ struct LocalVoiceLabView: View {
                 Section("Состояние") {
                     if engine.busy { ProgressView() }
                     Text(engine.status).font(.footnote)
+                }
+                Section {
+                    HStack {
+                        Spacer()
+                        Text("Chatterbox Multilingual · Core ML · локально на iPhone")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                            .multilineTextAlignment(.center)
+                        Spacer()
+                    }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
