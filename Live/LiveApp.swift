@@ -18,6 +18,7 @@ struct LiveView: View {
     @State private var exporting = false
     @State private var importing = false
     @State private var showTranscription = false
+    @State private var showVoiceLab = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
     @State private var importError: String?
@@ -131,38 +132,19 @@ struct LiveView: View {
                 }
                 .frame(height: 136)
 
-                Button { showTranscription = true } label: {
-                    HStack(spacing: 13) {
-                        Image(systemName: "waveform.badge.mic")
-                            .font(.title2)
-                            .frame(width: 41, height: 41)
-                            .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Голос → текст")
-                                .font(.headline)
-                            Text("Транскрибация аудиозаписей")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                HStack(spacing: 11) {
+                    HomeFeatureTile(title: "Голос → текст",
+                                    subtitle: "Транскрибация",
+                                    icon: "waveform.badge.mic") {
+                        showTranscription = true
                     }
-                    .foregroundStyle(.white)
-                    .padding(13)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        LinearGradient(colors: [Color(white: 0.14), Color(white: 0.07)],
-                                       startPoint: .leading, endPoint: .trailing),
-                        in: RoundedRectangle(cornerRadius: 18)
-                    )
-                    .overlay(RoundedRectangle(cornerRadius: 18)
-                        .strokeBorder(Color.white.opacity(0.14)))
+                    HomeFeatureTile(title: "Текст → голос",
+                                    subtitle: "Мой голос",
+                                    icon: "waveform") {
+                        showVoiceLab = true
+                    }
                 }
-                .buttonStyle(.plain)
                 .disabled(model.busy)
-                .accessibilityHint("Открыть расшифровку аудиозаписей")
 
                 HStack {
                     Button {
@@ -225,6 +207,7 @@ struct LiveView: View {
         .tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
+        .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView() }
         .sheet(isPresented: $importing) {
             RecordingDocumentPicker(
                 onSelected: { url in
@@ -325,6 +308,51 @@ struct LiveView: View {
     }
 }
 
+/// Compact paired entry points. Keep the microphone area unobstructed.
+private struct HomeFeatureTile: View {
+    let title: String
+    let subtitle: String
+    let icon: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 18, weight: .medium))
+                    .frame(width: 33, height: 38)
+                    .background(Color(white: 0.23),
+                                in: RoundedRectangle(cornerRadius: 11))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 14, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 0)
+            }
+            .frame(maxWidth: .infinity, minHeight: 65, alignment: .leading)
+            .padding(.horizontal, 9)
+            .background(
+                LinearGradient(colors: [Color(white: 0.15), Color(white: 0.08)],
+                               startPoint: .leading, endPoint: .trailing),
+                in: RoundedRectangle(cornerRadius: 17)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 17)
+                    .strokeBorder(Color.white.opacity(0.13))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 17))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title + ", " + subtitle)
+    }
+}
+
 /// Compact, shared balance: live translation and transcription use the SAME LiveSession.
 struct BalanceSummary: View {
     @ObservedObject var account: LiveSession
@@ -372,7 +400,6 @@ struct LiveSettings: View {
     @State private var balance = ""
     @State private var notice = ""
     @State private var deleteKey = false
-    @State private var showVoiceLab = false
     var body: some View {
         NavigationStack {
             Form {
@@ -419,16 +446,6 @@ struct LiveSettings: View {
                     Text("≈ $0,034 за минуту отправленного аудио.").font(.footnote)
                 }
                 Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
-                Section("Мой голос · эксперимент") {
-                    Button {
-                        model.stopAll()
-                        showVoiceLab = true
-                    } label: {
-                        Label("Создать и проверить свой голос", systemImage: "waveform.badge.mic")
-                    }
-                    Text("Бесплатная локальная модель Chatterbox: запись голоса, синтез на русском и немецком, сохранение WAV. Не влияет на обычный перевод.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
                 Section("Формат передачи аудио") {
                     Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)
                 }
@@ -441,7 +458,6 @@ struct LiveSettings: View {
                         do { try model.removeKey(); notice = "Ключ удалён" } catch { notice = error.localizedDescription }
                     }
                 }
-                .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView() }
                 .onDisappear { key = "" }
         }.tint(.white)
     }
