@@ -100,6 +100,21 @@ import Foundation
         if case .failure(.authorization) = try TranslationWire.event(permissionError) {
             // A permissions error does not prove the secret was incorrect.
         } else { fatalError("Missing model permission must not mark key invalid") }
+        // The on-device voice lab must expose exactly the 23 languages supported
+        // by the bundled Chatterbox Multilingual v2 model, not arbitrary API languages.
+        let voiceTags = VoiceSynthesisLanguage.all.map(\.code)
+        expect(voiceTags.count == 23 && Set(voiceTags).count == 23,
+               "Voice cloning language list must have exactly 23 unique tags")
+        for code in ["ru", "de", "en", "es", "fr", "pl", "it", "pt",
+                     "nl", "sv", "da", "no", "fi", "tr", "el", "ar",
+                     "he", "hi", "zh", "ja", "ko", "ms", "sw"] {
+            expect(VoiceSynthesisLanguage.supports(code),
+                   "A supported Chatterbox language is missing: " + code)
+            expect(!(VoiceSynthesisLanguage.sample(for: code) ?? "").isEmpty,
+                   "No example text available for " + code)
+        }
+        expect(!VoiceSynthesisLanguage.supports("ro"),
+               "Romanian is not supported by the current Chatterbox Multilingual weights")
         // New recorded-audio transcription modes must never be mixed up.
         expect(TranscriptionWire.expectedChunks(durationSeconds: 65 * 60) == 22,
                "65-minute Watch recording must be split into short chunks")
