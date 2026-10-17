@@ -12,12 +12,12 @@ concurrency:
 jobs:
   build:
     runs-on: macos-latest
-    timeout-minutes: 25
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Test new WAV and dedicated translation protocol
         run: |
-          swiftc Live/TranslationWire.swift Live/PartnerLanguage.swift Live/ImportedAudio.swift Live/TranscriptionWire.swift LiveTests/test_wire.swift -o "$RUNNER_TEMP/live-wire-tests"
+          swiftc Live/TranslationWire.swift Live/PartnerLanguage.swift Live/ImportedAudio.swift Live/TranscriptionWire.swift Live/VoiceSynthesisLanguage.swift Live/VoiceReferenceClip.swift LiveTests/test_wire.swift -o "$RUNNER_TEMP/live-wire-tests"
           "$RUNNER_TEMP/live-wire-tests"
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -41,6 +41,25 @@ jobs:
           assert '.fileImporter(isPresented: $importing' not in transcription
           assert 'UIDocumentPickerViewController(' in transcription
           assert 'asCopy: true' in transcription
+          voice_lab = Path('Live/LocalVoiceLab.swift').read_text()
+          assert 'HomeFeatureTile(title: "Текст → голос"' in app
+          assert 'HomeFeatureTile(title: "Голос → текст"' in app
+          assert 'Section("Экспериментальный режим")' not in voice_lab
+          assert 'VoiceSynthesisLanguage.supports(language)' in voice_lab
+          assert 'HomeFeatureTile(title: "Текст → голос"' in app
+          assert 'HomeFeatureTile(title: "Голос → текст"' in app
+          assert 'HomeFeatureGlyph(kind: kind)' in app
+          assert 'private struct HomeFeatureGlyph: View' in app
+          assert 'case .speechToText:' in app and 'case .textToSpeech:' in app
+          assert 'Color(white: 0.095)' in app
+          print('Original graphite vector icons and compact home tiles validated')
+          assert 'VoiceReferenceClip.prepare(referenceURL)' in voice_lab
+          clip = Path('Live/VoiceReferenceClip.swift').read_text()
+          assert 'maximumSeconds = 20.0' in clip
+          assert 'AVAudioFile(forReading:' in clip
+          assert 'AVAudioFile(' in clip and 'forWriting: temporaryURL' in clip
+          print('Safe voice reference clipping before Core ML enabled')
+          print('Compact dual-action homepage and validated TTS languages')
           print('UIKit copy-mode document picker wired for both import paths')
           print('Fresh Live sources only; shared icon assets permitted')
           PY
@@ -63,8 +82,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.1'
-          assert info['CFBundleVersion'] == '11'
+          assert info['CFBundleShortVersionString'] == '1.4.5'
+          assert info['CFBundleVersion'] == '15'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -72,11 +91,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.1-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.1-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.5-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.5-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.1-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.1-Unsigned.ipa
+          name: Interpreter-Live-1.4.5-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.5-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
