@@ -14,14 +14,19 @@ private var liveVersion: String {
 
 struct LiveView: View {
     @StateObject private var model = LiveSession()
+    @StateObject private var voiceLab = LocalVoiceLab()
     @State private var settings = false
     @State private var exporting = false
     @State private var importing = false
     @State private var showTranscription = false
+    @State private var showVoiceLab = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
     @State private var importError: String?
     @AppStorage("live.keepAwake") private var keepAwake = true
+    @AppStorage("live.voiceWarmupEnabled") private var voiceWarmupEnabled = true
+    @State private var voiceWarmupTask: Task<Void, Never>?
+    @State private var voiceWarmupAttempted = false
     @AppStorage("live.partnerLanguage") private var partnerCode = "de"
     @State private var orbitActive = false
     @State private var orbitDragStart = 0
@@ -131,38 +136,19 @@ struct LiveView: View {
                 }
                 .frame(height: 136)
 
-                Button { showTranscription = true } label: {
-                    HStack(spacing: 13) {
-                        Image(systemName: "waveform.badge.mic")
-                            .font(.title2)
-                            .frame(width: 41, height: 41)
-                            .background(Color(white: 0.22), in: RoundedRectangle(cornerRadius: 12))
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text("Голос → текст")
-                                .font(.headline)
-                            Text("Транскрибация аудиозаписей")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    HomeFeatureTile(title: "Голос → текст",
+                                    subtitle: "Транскрибация",
+                                    kind: .speechToText) {
+                        showTranscription = true
                     }
-                    .foregroundStyle(.white)
-                    .padding(13)
-                    .frame(maxWidth: .infinity)
-                    .background(
-                        LinearGradient(colors: [Color(white: 0.14), Color(white: 0.07)],
-                                       startPoint: .leading, endPoint: .trailing),
-                        in: RoundedRectangle(cornerRadius: 18)
-                    )
-                    .overlay(RoundedRectangle(cornerRadius: 18)
-                        .strokeBorder(Color.white.opacity(0.14)))
+                    HomeFeatureTile(title: "Текст → голос",
+                                    subtitle: "Мой голос",
+                                    kind: .textToSpeech) {
+                        showVoiceLab = true
+                    }
                 }
-                .buttonStyle(.plain)
                 .disabled(model.busy)
-                .accessibilityHint("Открыть расшифровку аудиозаписей")
 
                 HStack {
                     Button {
@@ -225,6 +211,7 @@ struct LiveView: View {
         .tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
+        .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView(engine: voiceLab) }
         .sheet(isPresented: $importing) {
             RecordingDocumentPicker(
                 onSelected: { url in
@@ -255,16 +242,29 @@ struct LiveView: View {
         } message: {
             Text(importError ?? "")
         }
-        .onAppear { updateAwake() }
+        .onAppear {
+            updateAwake()
+            scheduleVoiceWarmup()
+        }
         .onDisappear {
+            voiceWarmupTask?.cancel()
             orbitHide?.cancel()
             UIApplication.shared.isIdleTimerDisabled = false
             model.background()
         }
         .onChange(of: keepAwake) { _, _ in updateAwake() }
+        .onChange(of: voiceWarmupEnabled) { _, enabled in
+            if enabled { scheduleVoiceWarmup() }
+            else { voiceWarmupTask?.cancel() }
+        }
         .onChange(of: scenePhase) { _, phase in
             updateAwake()
-            if phase != .active { model.background() }
+            if phase != .active {
+                voiceWarmupTask?.cancel()
+                model.background()
+            } else {
+                scheduleVoiceWarmup()
+            }
         }
     }
 
@@ -320,8 +320,174 @@ struct LiveView: View {
             .frame(maxWidth: .infinity)
     }
 
+    /// Prepare the previously downloaded local voice weights opportunistically.
+    /// Never delay the live translator, open the microphone, or preload while
+    /// iOS requests low power / is thermally stressed. No repeated hot loop.
+    private func scheduleVoiceWarmup() {
+        voiceWarmupTask?.cancel()
+        guard voiceWarmupEnabled,
+              !voiceWarmupAttempted,
+              voiceLab.modelOnDisk,
+              voiceLab.hasVoice,
+              !voiceLab.loaded,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled
+        else { return }
+        voiceWarmupTask = Task { @MainActor in
+            // Let the translator finish launching and give the user a chance
+            // to begin a press-to-talk turn before using heavy Core ML.
+            for _ in 0..<18 {
+                do { try await Task.sleep(for: .seconds(5)) }
+                catch { return }
+                guard !Task.isCancelled,
+                      voiceWarmupEnabled,
+                      scenePhase == .active,
+                      !voiceLab.loaded,
+                      !ProcessInfo.processInfo.isLowPowerModeEnabled
+                else { return }
+                if showVoiceLab { return } // visible sheet offers a manual load
+                let thermal = ProcessInfo.processInfo.thermalState
+                guard thermal != .serious && thermal != .critical else { return }
+                if model.phase == .idle && !model.busy && !voiceLab.busy {
+                    voiceWarmupAttempted = true
+                    voiceLab.warmupIfAvailable()
+                    return
+                }
+            }
+        }
+    }
+
     private func updateAwake() {
         UIApplication.shared.isIdleTimerDisabled = keepAwake && scenePhase == .active
+    }
+}
+
+/// Paired, matte graphite home entry points; custom vector artwork is drawn
+/// natively with Canvas so it scales crisply and needs no raster assets.
+private enum HomeFeatureKind: Equatable {
+    case speechToText
+    case textToSpeech
+}
+
+private struct HomeFeatureTile: View {
+    let title: String
+    let subtitle: String
+    let kind: HomeFeatureKind
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                HomeFeatureGlyph(kind: kind)
+                    .frame(width: 33, height: 35)
+                    .frame(width: 43, height: 47)
+                    .background(
+                        LinearGradient(
+                            colors: [Color(white: 0.31), Color(white: 0.14)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        in: RoundedRectangle(cornerRadius: 13)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 13)
+                            .strokeBorder(Color.white.opacity(0.09))
+                    )
+                    .accessibilityHidden(true)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.system(size: 13, weight: .semibold))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.76)
+                    Text(subtitle)
+                        .font(.caption2)
+                        .foregroundStyle(Color(white: 0.63))
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .foregroundStyle(.white)
+            .frame(maxWidth: .infinity, minHeight: 87, alignment: .leading)
+            .padding(.horizontal, 9)
+            .background(Color(white: 0.095),
+                        in: RoundedRectangle(cornerRadius: 17))
+            .overlay(
+                RoundedRectangle(cornerRadius: 17)
+                    .strokeBorder(Color.white.opacity(0.16))
+            )
+            .contentShape(RoundedRectangle(cornerRadius: 17))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(title + ", " + subtitle)
+    }
+}
+
+/// Left: a speaking human profile, incoming sound, and text lines.
+/// Right: written text followed by a speaker with outgoing sound.
+/// Both are original SF-style line illustrations, independent of the
+/// microphone and existing live-translation processing pipeline.
+private struct HomeFeatureGlyph: View {
+    let kind: HomeFeatureKind
+
+    var body: some View {
+        Canvas { context, size in
+            let scale = min(size.width, size.height) / 48
+            var drawing = context
+            drawing.translateBy(
+                x: (size.width - scale * 48) / 2,
+                y: (size.height - scale * 48) / 2
+            )
+            drawing.scaleBy(x: scale, y: scale)
+
+            var strokes = Path()
+            switch kind {
+            case .speechToText:
+                strokes.move(to: CGPoint(x: 30, y: 5))
+                strokes.addLines([
+                    CGPoint(x: 24, y: 13), CGPoint(x: 22, y: 20),
+                    CGPoint(x: 27, y: 25), CGPoint(x: 34, y: 26),
+                    CGPoint(x: 29, y: 30), CGPoint(x: 32, y: 35),
+                    CGPoint(x: 25, y: 37), CGPoint(x: 25, y: 43),
+                    CGPoint(x: 34, y: 43)
+                ])
+                strokes.move(to: CGPoint(x: 17, y: 19))
+                strokes.addQuadCurve(to: CGPoint(x: 17, y: 34),
+                                     control: CGPoint(x: 11, y: 26))
+                strokes.move(to: CGPoint(x: 12, y: 15))
+                strokes.addQuadCurve(to: CGPoint(x: 12, y: 38),
+                                     control: CGPoint(x: 2, y: 27))
+                for (y, width) in [(18.0, 7.0), (24.0, 7.0), (30.0, 5.0)] {
+                    strokes.move(to: CGPoint(x: 38, y: y))
+                    strokes.addLine(to: CGPoint(x: 38 + width, y: y))
+                }
+                drawing.fill(
+                    Path(ellipseIn: CGRect(x: 34, y: 10, width: 2.6, height: 2.6)),
+                    with: .color(.white)
+                )
+            case .textToSpeech:
+                for (y, width) in [(11.0, 19.0), (18.0, 15.0),
+                                   (25.0, 15.0), (32.0, 11.0)] {
+                    strokes.move(to: CGPoint(x: 5, y: y))
+                    strokes.addLine(to: CGPoint(x: 5 + width, y: y))
+                }
+                strokes.move(to: CGPoint(x: 27, y: 20))
+                strokes.addLines([
+                    CGPoint(x: 33, y: 20), CGPoint(x: 41, y: 14),
+                    CGPoint(x: 41, y: 35), CGPoint(x: 33, y: 29),
+                    CGPoint(x: 27, y: 29), CGPoint(x: 27, y: 20)
+                ])
+                strokes.move(to: CGPoint(x: 44, y: 18))
+                strokes.addQuadCurve(to: CGPoint(x: 44, y: 31),
+                                     control: CGPoint(x: 50, y: 24.5))
+            }
+            drawing.stroke(
+                strokes,
+                with: .color(.white),
+                style: StrokeStyle(lineWidth: 2.4,
+                                   lineCap: .round,
+                                   lineJoin: .round)
+            )
+        }
     }
 }
 
@@ -368,6 +534,7 @@ struct LiveSettings: View {
     @ObservedObject var model: LiveSession
     @Environment(\.dismiss) private var dismiss
     @AppStorage("live.keepAwake") private var keepAwake = true
+    @AppStorage("live.voiceWarmupEnabled") private var voiceWarmupEnabled = true
     @State private var key = ""
     @State private var balance = ""
     @State private var notice = ""
@@ -418,6 +585,9 @@ struct LiveSettings: View {
                     Text("≈ $0,034 за минуту отправленного аудио.").font(.footnote)
                 }
                 Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
+                Section("Локальная модель") {
+                    Toggle("Подготавливать мой голос при запуске", isOn: $voiceWarmupEnabled)
+                }
                 Section("Формат передачи аудио") {
                     Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)
                 }
