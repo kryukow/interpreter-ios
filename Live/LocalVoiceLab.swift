@@ -543,7 +543,7 @@ struct LocalVoiceLabView: View {
                         Spacer(minLength: 8)
                         if engine.isSynthesizing {
                             LocalSynthesisHeaderMotion()
-                                .frame(width: 96, height: 20)
+                                .frame(width: 100, height: 24)
                                 .accessibilityHidden(true)
                                 .transition(.opacity)
                         }
@@ -635,8 +635,8 @@ private struct LocalSynthesisWave: View {
 }
 
 
-/// Subtle header progress indicator, independent of the audio waveform below.
-/// The small signal moves back and forth only while synthesis is active.
+/// A compact monochrome pixel impulse. Only created while synthesis is active.
+/// Squares rise one after another with a soft centre-weighted envelope.
 private struct LocalSynthesisHeaderMotion: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -645,32 +645,29 @@ private struct LocalSynthesisHeaderMotion: View {
             minimumInterval: reduceMotion ? 1 : 1.0 / 24.0,
             paused: reduceMotion
         )) { timeline in
-            let phase = reduceMotion
-                ? 0.0
-                : timeline.date.timeIntervalSinceReferenceDate
-            let position = 0.5 + 0.5 * sin(phase * 2.3)
-            ZStack(alignment: .leading) {
-                Capsule()
-                    .fill(Color.white.opacity(0.28))
-                    .frame(height: 2)
-                    .padding(.horizontal, 4)
-                HStack(spacing: 2) {
-                    Image(systemName: "waveform")
-                        .font(.system(size: 13, weight: .medium))
-                    Circle()
-                        .frame(width: 3, height: 3)
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            HStack(spacing: 2) {
+                ForEach(0..<17, id: \.self) { index in
+                    let centre = 8.0
+                    let envelope = pow(max(0, 1 - abs(Double(index) - centre) / 9), 1.25)
+                    let progress = reduceMotion ? 0.0 :
+                        (time / 1.55 - Double(index) * 0.063 / 1.55)
+                            .truncatingRemainder(dividingBy: 1)
+                    let cycle = progress < 0 ? progress + 1 : progress
+                    let lift = cycle < 0.24 ? cycle / 0.24 :
+                        cycle < 0.43 ? (0.43 - cycle) / 0.19 : 0
+                    let displacement = CGFloat((3 + 9 * envelope) * max(0, lift))
+                    RoundedRectangle(cornerRadius: 0.6)
+                        .fill(Color.white.opacity(reduceMotion ? 0.65 : (0.30 + 0.70 * max(0, lift))))
+                        .frame(width: 4, height: 4)
+                        .offset(y: -displacement)
                 }
-                .foregroundStyle(.white)
-                .shadow(color: .white.opacity(0.35), radius: 5)
-                .frame(width: 27, height: 18)
-                .offset(x: CGFloat(position) * 69)
             }
-            .frame(width: 96, height: 20)
+            .frame(width: 100, height: 24)
         }
     }
 }
 
- 
 /// Indeterminate progress: moving white impulse, without invented percentage.
 private struct LocalModelLoadingLine: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
