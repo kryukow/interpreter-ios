@@ -100,6 +100,22 @@ import Foundation
         if case .failure(.authorization) = try TranslationWire.event(permissionError) {
             // A permissions error does not prove the secret was incorrect.
         } else { fatalError("Missing model permission must not mark key invalid") }
+        // The offending 658944-sample 24 kHz reference is too long for
+        // the fixed Core ML encoder: cap it at 480000 samples (20 seconds).
+        expect(VoiceReferenceClip.maximumSeconds == 20.0,
+               "Safe maximum reference duration must stay at 20 seconds")
+        expect(VoiceReferenceClip.limitedFrameCount(
+            sampleRate: 24_000, totalFrames: 658_944) == 480_000,
+               "Core ML overlong voice reference must be clipped")
+        expect(VoiceReferenceClip.limitedFrameCount(
+            sampleRate: 24_000, totalFrames: 360_000) == 360_000,
+               "Short clean reference must not be clipped")
+        expect(VoiceReferenceClip.limitedFrameCount(
+            sampleRate: 16_000, totalFrames: 660_000) == 320_000,
+               "Resampled 16 kHz reference must also be safe")
+        expect(VoiceReferenceClip.limitedFrameCount(
+            sampleRate: 0, totalFrames: 1234) == 0,
+               "Invalid input sample rate must be rejected")
         // The on-device voice lab must expose exactly the 23 languages supported
         // by the bundled Chatterbox Multilingual v2 model, not arbitrary API languages.
         let voiceTags = VoiceSynthesisLanguage.all.map(\.code)
