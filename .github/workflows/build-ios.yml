@@ -68,14 +68,17 @@ jobs:
           assert 'Button("Готово") { textEditorFocused = false }' not in voice_lab
           assert 'ToolbarItem(placement: .confirmationAction)' in voice_lab
           assert 'Button("Готово") {' in voice_lab
-          assert 'LocalSynthesisWave()' in voice_lab
-          assert 'private struct LocalSynthesisWave: View' in voice_lab
+          assert 'LocalModelLoadingLine()' in voice_lab
+          assert 'private struct LocalModelLoadingLine: View' in voice_lab
           assert 'TimelineView(.animation(' in voice_lab
           assert 'if engine.isSynthesizing {' in voice_lab
           assert '.safeAreaInset(edge: .bottom, spacing: 0)' not in voice_lab
           assert 'footer: {' in voice_lab
           assert 'Text("Chatterbox Multilingual · Core ML · локально на iPhone")' in voice_lab
           assert 'LocalSynthesisHeaderMotion()' in voice_lab
+          assert 'Text("Состояние")' not in voice_lab
+          assert 'Color.green.opacity' not in voice_lab
+          assert 'Color.white.opacity(0.28)' in voice_lab
           assert 'private struct LocalSynthesisHeaderMotion: View' in voice_lab
           assert 'if engine.isSynthesizing {' in voice_lab
           assert 'Button("Повторить аудио")' in voice_lab
@@ -94,7 +97,7 @@ jobs:
           assert 'if !engine.hasVoice {' in voice_lab
           assert 'if engine.modelOnDisk {' in voice_lab
           assert 'self.removeOldReference()' in voice_lab
-          assert 'RoundedRectangle(cornerRadius: 3)' in voice_lab
+          assert 'LocalModelLoadingLine()' in voice_lab
           assert 'Chatterbox Multilingual · Core ML · локально на iPhone' in voice_lab
           assert 'live.voiceModelLoadedBefore' in voice_lab
           assert 'UserDefaults.standard.set(true' in voice_lab
@@ -122,8 +125,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.9'
-          assert info['CFBundleVersion'] == '19'
+          assert info['CFBundleShortVersionString'] == '1.4.10'
+          assert info['CFBundleVersion'] == '20'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -131,11 +134,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.9-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.9-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.10-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.10-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.9-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.9-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.10-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.10-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
