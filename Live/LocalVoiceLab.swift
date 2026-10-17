@@ -21,6 +21,7 @@ final class LocalVoiceLab: ObservableObject {
     @Published private(set) var hasVoice = false
     @Published private(set) var outputURL: URL?
     @Published private(set) var isSynthesizing = false
+    @Published private(set) var modelError: String?
 
     private static let repository = ModelRepository.defaultMultilingualRepoId
     private static let home = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -44,6 +45,7 @@ final class LocalVoiceLab: ObservableObject {
 
     func download() {
         guard !busy else { return }
+        modelError = nil
         busy = true
         activeOperation = .downloading
         downloading = true
@@ -78,6 +80,7 @@ final class LocalVoiceLab: ObservableObject {
                 self.status = "Загрузка прервана. Её можно повторить."
             } catch {
                 self.status = "Ошибка загрузки: \(error.localizedDescription)"
+                self.modelError = self.status
             }
         }
     }
@@ -95,6 +98,7 @@ final class LocalVoiceLab: ObservableObject {
         guard let directory = ModelRepository.existingModelDirectory(
             hfHome: Self.home, repoId: Self.repository)
         else { status = "Сначала скачай модель."; return }
+        modelError = nil
         busy = true
         activeOperation = .loading
         let hadLoadedBefore = UserDefaults.standard.bool(forKey: "live.voiceModelLoadedBefore")
@@ -123,6 +127,7 @@ final class LocalVoiceLab: ObservableObject {
             } catch {
                 self.loaded = false
                 self.status = "Не удалось загрузить модель: \(error.localizedDescription)"
+                self.modelError = self.status
             }
         }
     }
@@ -425,45 +430,38 @@ struct LocalVoiceLabView: View {
             Form {
                 Section("Модель") {
                     if engine.modelOnDisk {
-                        VStack(alignment: .leading, spacing: 0) {
-                            HStack(spacing: 13) {
-                                Image(systemName: "checkmark.circle")
-                                    .foregroundStyle(.green)
-                                    .font(.title3)
-                                    .frame(width: 24)
-                                Text("Файлы модели найдены")
-                                    .foregroundStyle(.green)
+                        Label("Файлы модели найдены", systemImage: "checkmark.circle")
+                            .foregroundStyle(.primary)
+                        if engine.loaded {
+                            Label("Модель готова", systemImage: "checkmark.circle")
+                                .foregroundStyle(.primary)
+                        } else if engine.busy && !engine.downloading {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Text("Подготовка модели")
+                                    .font(.subheadline)
+                                LocalModelLoadingLine()
+                                    .frame(height: 8)
+                                    .accessibilityLabel("Идёт подготовка модели")
+                                Text("Подготавливаю модель на iPhone…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
                             }
-                            HStack {
-                                RoundedRectangle(cornerRadius: 3)
-                                    .fill(engine.loaded ? Color.green : Color.secondary.opacity(0.35))
-                                    .frame(width: 3, height: 23)
-                                    .padding(.leading, 10)
-                                Spacer()
-                            }
-                            HStack(spacing: 13) {
-                                Image(systemName: engine.loaded ? "checkmark.circle" : "circle.dotted")
-                                    .foregroundStyle(engine.loaded ? Color.green : Color.secondary)
-                                    .font(.title3)
-                                    .frame(width: 24)
-                                Text(engine.loaded ? "Модель готова" : "Ожидает подготовки")
-                                    .foregroundStyle(engine.loaded ? Color.green : Color.secondary)
+                            .padding(.vertical, 5)
+                        } else {
+                            Button(engine.modelError == nil ? "Загрузить модель" : "Повторить подготовку") {
+                                engine.load()
                             }
                         }
-                        .accessibilityElement(children: .combine)
-                        .padding(.vertical, 4)
-                    }
-                    if !engine.modelOnDisk {
+                    } else {
                         Button("Скачать Chatterbox Multilingual") { engine.download() }
                             .disabled(engine.busy)
-                    }
-                    if engine.downloading { ProgressView(value: engine.downloadProgress) }
-                    if engine.modelOnDisk && !engine.loaded {
-                        if engine.busy {
-                            ProgressView("Подготавливаю модель…")
-                        } else {
-                            Button("Загрузить модель") { engine.load() }
+                        if engine.downloading {
+                            ProgressView(value: engine.downloadProgress)
+                                .tint(.white)
                         }
+                    }
+                    if let error = engine.modelError {
+                        Text(error).font(.footnote).foregroundStyle(.secondary)
                     }
                 }
                 Section("Мой голос") {
@@ -552,42 +550,7 @@ struct LocalVoiceLabView: View {
                     }
                 }
                 Section {
-                    if engine.isSynthesizing {
-                        VStack(alignment: .leading, spacing: 5) {
-                            HStack(alignment: .center) {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Синтезирую речь локально…")
-                                        .font(.subheadline.weight(.semibold))
-                                    Text("Chatterbox · обработка на iPhone")
-                                        .font(.caption2)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Circle()
-                                    .fill(Color.green.opacity(0.95))
-                                    .frame(width: 10, height: 10)
-                                    .shadow(color: .green.opacity(0.65), radius: 11)
-                                    .accessibilityHidden(true)
-                            }
-                            LocalSynthesisWave()
-                                .frame(height: 83)
-                                .accessibilityHidden(true)
-                        }
-                        .padding(.vertical, 7)
-                        .accessibilityElement(children: .combine)
-                    } else if engine.outputURL != nil && !engine.busy {
-                        Label("Аудио готово", systemImage: "checkmark.circle.fill")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.green)
-                        Text(engine.status)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } else {
-                        if engine.busy { ProgressView() }
-                        Text(engine.status).font(.footnote)
-                    }
-                } header: {
-                    Text("Состояние")
+                    EmptyView()
                 } footer: {
                     Text("Chatterbox Multilingual · Core ML · локально на iPhone")
                         .font(.caption2)
@@ -636,7 +599,7 @@ private struct LocalSynthesisWave: View {
     var body: some View {
         ZStack {
             Capsule()
-                .fill(Color.green.opacity(0.17))
+                .fill(Color.white.opacity(0.10))
                 .frame(width: 180, height: 28)
                 .blur(radius: 20)
 
@@ -664,7 +627,7 @@ private struct LocalSynthesisWave: View {
                         let opacity = 0.42 + envelope * 0.58
                         context.fill(
                             Path(roundedRect: rect, cornerRadius: barWidth / 2),
-                            with: .color(Color(red: 0.31, green: 0.88, blue: 0.49)
+                            with: .color(Color.white
                                 .opacity(opacity))
                         )
                     }
@@ -691,7 +654,7 @@ private struct LocalSynthesisHeaderMotion: View {
             let position = 0.5 + 0.5 * sin(phase * 2.3)
             ZStack(alignment: .leading) {
                 Capsule()
-                    .fill(Color.green.opacity(0.28))
+                    .fill(Color.white.opacity(0.28))
                     .frame(height: 2)
                     .padding(.horizontal, 4)
                 HStack(spacing: 2) {
@@ -700,12 +663,39 @@ private struct LocalSynthesisHeaderMotion: View {
                     Circle()
                         .frame(width: 3, height: 3)
                 }
-                .foregroundStyle(.green)
-                .shadow(color: .green.opacity(0.65), radius: 6)
+                .foregroundStyle(.white)
+                .shadow(color: .white.opacity(0.35), radius: 5)
                 .frame(width: 27, height: 18)
                 .offset(x: CGFloat(position) * 69)
             }
             .frame(width: 96, height: 20)
+        }
+    }
+}
+
+ 
+/// Indeterminate progress: moving white impulse, without invented percentage.
+private struct LocalModelLoadingLine: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(
+            minimumInterval: reduceMotion ? 1 : 1.0 / 24.0,
+            paused: reduceMotion
+        )) { timeline in
+            let time = timeline.date.timeIntervalSinceReferenceDate
+            let position = reduceMotion ? 0.5 : (0.5 + 0.5 * sin(time * 2.0))
+            GeometryReader { geometry in
+                let impulseWidth = max(28, geometry.size.width * 0.28)
+                ZStack(alignment: .leading) {
+                    Capsule().fill(Color.white.opacity(0.16)).frame(height: 3)
+                    Capsule()
+                        .fill(Color.white.opacity(0.95))
+                        .frame(width: impulseWidth, height: 3)
+                        .offset(x: (geometry.size.width - impulseWidth) * position)
+                }
+                .frame(height: geometry.size.height)
+            }
         }
     }
 }
