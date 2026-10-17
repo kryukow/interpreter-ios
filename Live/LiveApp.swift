@@ -14,6 +14,7 @@ private var liveVersion: String {
 
 struct LiveView: View {
     @StateObject private var model = LiveSession()
+    @StateObject private var voiceLab = LocalVoiceLab()
     @State private var settings = false
     @State private var exporting = false
     @State private var importing = false
@@ -23,6 +24,9 @@ struct LiveView: View {
     @State private var exportError = false
     @State private var importError: String?
     @AppStorage("live.keepAwake") private var keepAwake = true
+    @AppStorage("live.voiceWarmupEnabled") private var voiceWarmupEnabled = true
+    @State private var voiceWarmupTask: Task<Void, Never>?
+    @State private var voiceWarmupAttempted = false
     @AppStorage("live.partnerLanguage") private var partnerCode = "de"
     @State private var orbitActive = false
     @State private var orbitDragStart = 0
@@ -207,7 +211,7 @@ struct LiveView: View {
         .tint(.white)
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
-        .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView() }
+        .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView(engine: voiceLab) }
         .sheet(isPresented: $importing) {
             RecordingDocumentPicker(
                 onSelected: { url in
@@ -238,16 +242,29 @@ struct LiveView: View {
         } message: {
             Text(importError ?? "")
         }
-        .onAppear { updateAwake() }
+        .onAppear {
+            updateAwake()
+            scheduleVoiceWarmup()
+        }
         .onDisappear {
+            voiceWarmupTask?.cancel()
             orbitHide?.cancel()
             UIApplication.shared.isIdleTimerDisabled = false
             model.background()
         }
         .onChange(of: keepAwake) { _, _ in updateAwake() }
+        .onChange(of: voiceWarmupEnabled) { _, enabled in
+            if enabled { scheduleVoiceWarmup() }
+            else { voiceWarmupTask?.cancel() }
+        }
         .onChange(of: scenePhase) { _, phase in
             updateAwake()
-            if phase != .active { model.background() }
+            if phase != .active {
+                voiceWarmupTask?.cancel()
+                model.background()
+            } else {
+                scheduleVoiceWarmup()
+            }
         }
     }
 
@@ -301,6 +318,42 @@ struct LiveView: View {
                     end: { model.end(language) },
                     cancel: { model.abortPress(language) })
             .frame(maxWidth: .infinity)
+    }
+
+    /// Prepare the previously downloaded local voice weights opportunistically.
+    /// Never delay the live translator, open the microphone, or preload while
+    /// iOS requests low power / is thermally stressed. No repeated hot loop.
+    private func scheduleVoiceWarmup() {
+        voiceWarmupTask?.cancel()
+        guard voiceWarmupEnabled,
+              !voiceWarmupAttempted,
+              voiceLab.modelOnDisk,
+              voiceLab.hasVoice,
+              !voiceLab.loaded,
+              !ProcessInfo.processInfo.isLowPowerModeEnabled
+        else { return }
+        voiceWarmupTask = Task { @MainActor in
+            // Let the translator finish launching and give the user a chance
+            // to begin a press-to-talk turn before using heavy Core ML.
+            for _ in 0..<18 {
+                do { try await Task.sleep(for: .seconds(5)) }
+                catch { return }
+                guard !Task.isCancelled,
+                      voiceWarmupEnabled,
+                      scenePhase == .active,
+                      !voiceLab.loaded,
+                      !ProcessInfo.processInfo.isLowPowerModeEnabled
+                else { return }
+                if showVoiceLab { return } // visible sheet offers a manual load
+                let thermal = ProcessInfo.processInfo.thermalState
+                guard thermal != .serious && thermal != .critical else { return }
+                if model.phase == .idle && !model.busy && !voiceLab.busy {
+                    voiceWarmupAttempted = true
+                    voiceLab.warmupIfAvailable()
+                    return
+                }
+            }
+        }
     }
 
     private func updateAwake() {
@@ -481,6 +534,7 @@ struct LiveSettings: View {
     @ObservedObject var model: LiveSession
     @Environment(\.dismiss) private var dismiss
     @AppStorage("live.keepAwake") private var keepAwake = true
+    @AppStorage("live.voiceWarmupEnabled") private var voiceWarmupEnabled = true
     @State private var key = ""
     @State private var balance = ""
     @State private var notice = ""
@@ -531,6 +585,9 @@ struct LiveSettings: View {
                     Text("≈ $0,034 за минуту отправленного аудио.").font(.footnote)
                 }
                 Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
+                Section("Локальная модель") {
+                    Toggle("Подготавливать мой голос при запуске", isOn: $voiceWarmupEnabled)
+                }
                 Section("Формат передачи аудио") {
                     Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)
                 }
