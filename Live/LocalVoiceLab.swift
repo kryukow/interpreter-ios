@@ -492,14 +492,14 @@ struct LocalVoiceLabView: View {
                             .disabled(engine.busy || engine.isRecording)
                         if engine.hasReference {
                             Label("Образец подготовлен", systemImage: "checkmark.circle")
-                                .foregroundStyle(.green)
+                                .foregroundStyle(.white)
                             Button("Создать мой голос") { engine.clone() }
                                 .disabled(engine.busy || !engine.loaded)
                         }
                     } else {
                         Label("Копия голоса сохранена на iPhone",
                               systemImage: "checkmark.circle")
-                            .foregroundStyle(.green)
+                            .foregroundStyle(.white)
                         Button("Удалить мою копию голоса", role: .destructive) {
                             confirmingVoiceDeletion = true
                         }.disabled(engine.busy)
