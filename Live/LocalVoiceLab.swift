@@ -89,7 +89,7 @@ final class LocalVoiceLab: ObservableObject {
                 try Task.checkCancellation()
                 self.model = loadedModel
                 self.loaded = true
-                self.status = "Модель готова. Запиши свой голос (25–30 секунд)."
+                self.status = "Модель готова. Запиши 15–20 секунд голоса."
             } catch is CancellationError {
                 self.status = "Загрузка модели отменена."
             } catch {
@@ -134,7 +134,7 @@ final class LocalVoiceLab: ObservableObject {
             guard audio.record() else { throw VoiceLabError.recordingFailed }
             recorder = audio
             isRecording = true
-            status = "Записываю. Говори выразительно 25–30 секунд, затем останови."
+            status = "Записываю. Говори выразительно около 20 секунд, затем останови."
         } catch {
             status = "Микрофон: \(error.localizedDescription)"
         }
@@ -149,13 +149,15 @@ final class LocalVoiceLab: ObservableObject {
         try? AVAudioSession.sharedInstance().setActive(false)
         guard recordedDuration >= 10 else {
             try? FileManager.default.removeItem(at: audio.url)
-            status = "Слишком коротко: нужно хотя бы 10 секунд, лучше 25–30."
+            status = "Слишком коротко: нужно хотя бы 10 секунд, лучше 15–20."
             return
         }
         removeOldReference()
         referenceURL = audio.url
         hasReference = true
-        status = "Образец готов. Создай копию своего голоса."
+        status = recordedDuration > VoiceReferenceClip.maximumSeconds
+            ? "Образец готов. Для клонирования возьму первые 20 секунд."
+            : "Образец готов. Создай копию своего голоса."
     }
 
     func importReference(_ url: URL) {
@@ -174,7 +176,7 @@ final class LocalVoiceLab: ObservableObject {
             removeOldReference()
             referenceURL = target
             hasReference = true
-            status = "Аудиофайл импортирован. Желательно 25–30 секунд чистой речи."
+            status = "Аудиофайл импортирован. Для клонирования используются до 20 секунд речи."
         } catch {
             status = "Не удалось импортировать запись: \(error.localizedDescription)"
         }
@@ -195,18 +197,29 @@ final class LocalVoiceLab: ObservableObject {
                 let destination = Self.voiceURL
                 let temporary = Self.home.appendingPathComponent(
                     "new-\(UUID().uuidString)-conds.safetensors")
-                try await Task.detached(priority: .userInitiated) {
+                let clipped = try await Task.detached(priority: .userInitiated) {
                     defer { try? FileManager.default.removeItem(at: temporary) }
+                    let prepared = try VoiceReferenceClip.prepare(referenceURL)
+                    defer {
+                        if prepared.clipped {
+                            try? FileManager.default.removeItem(at: prepared.url)
+                        }
+                    }
+                    try Task.checkCancellation()
                     let cloner = try await VoiceCloner(modelDirectory: directory)
-                    try cloner.cloneVoice(from: referenceURL, to: temporary)
+                    try cloner.cloneVoice(from: prepared.url, to: temporary)
+                    try Task.checkCancellation()
                     if FileManager.default.fileExists(atPath: destination.path) {
                         _ = try FileManager.default.replaceItemAt(destination, withItemAt: temporary)
                     } else {
                         try FileManager.default.moveItem(at: temporary, to: destination)
                     }
+                    return prepared.clipped
                 }.value
                 self.hasVoice = true
-                self.status = "Голос создан. Выбери язык и нажми «Озвучить»."
+                self.status = clipped
+                    ? "Голос создан из первых 20 секунд. Теперь можно озвучивать текст."
+                    : "Голос создан. Выбери язык и нажми «Озвучить»."
             } catch {
                 self.status = "Не удалось клонировать голос: \(error.localizedDescription)"
             }
