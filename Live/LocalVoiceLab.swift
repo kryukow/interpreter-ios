@@ -20,6 +20,7 @@ final class LocalVoiceLab: ObservableObject {
     @Published private(set) var hasReference = false
     @Published private(set) var hasVoice = false
     @Published private(set) var outputURL: URL?
+    @Published private(set) var isSynthesizing = false
 
     private static let repository = ModelRepository.defaultMultilingualRepoId
     private static let home = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -290,6 +291,7 @@ final class LocalVoiceLab: ObservableObject {
         }
         busy = true
         activeOperation = .speaking
+        isSynthesizing = true
         outputURL = nil
         player?.stop()
         player = nil
@@ -297,6 +299,7 @@ final class LocalVoiceLab: ObservableObject {
         task = Task { [weak self] in
             guard let self else { return }
             defer {
+                self.isSynthesizing = false
                 self.busy = false
                 self.activeOperation = .idle
             }
@@ -507,21 +510,54 @@ struct LocalVoiceLabView: View {
                     }
                 }
                 Section("Состояние") {
-                    if engine.busy { ProgressView() }
-                    Text(engine.status).font(.footnote)
-                }
-                Section {
-                    HStack {
-                        Spacer()
-                        Text("Chatterbox Multilingual · Core ML · локально на iPhone")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                            .multilineTextAlignment(.center)
-                        Spacer()
+                    if engine.isSynthesizing {
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack(alignment: .center) {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Синтезирую речь локально…")
+                                        .font(.subheadline.weight(.semibold))
+                                    Text("Chatterbox · обработка на iPhone")
+                                        .font(.caption2)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Circle()
+                                    .fill(Color.green.opacity(0.95))
+                                    .frame(width: 10, height: 10)
+                                    .shadow(color: .green.opacity(0.65), radius: 11)
+                                    .accessibilityHidden(true)
+                            }
+                            LocalSynthesisWave()
+                                .frame(height: 83)
+                                .accessibilityHidden(true)
+                        }
+                        .padding(.vertical, 7)
+                        .accessibilityElement(children: .combine)
+                    } else if engine.outputURL != nil && !engine.busy {
+                        Label("Аудио готово", systemImage: "checkmark.circle.fill")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.green)
+                        Text(engine.status)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        if engine.busy { ProgressView() }
+                        Text(engine.status).font(.footnote)
                     }
                 }
             }
             .scrollDismissesKeyboard(.interactively)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Text("Chatterbox Multilingual · Core ML · локально на iPhone")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 9)
+                    .background(Color(uiColor: .systemGroupedBackground))
+                    .accessibilityLabel("Локальная модель Chatterbox Multilingual, Core ML")
+            }
             .navigationTitle("Текст → голос")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -529,11 +565,6 @@ struct LocalVoiceLabView: View {
                         textEditorFocused = false
                         dismiss()
                     }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Готово") { textEditorFocused = false }
-                        .fontWeight(.semibold)
                 }
             }
             .fileImporter(isPresented: $importing,
@@ -550,5 +581,53 @@ struct LocalVoiceLabView: View {
             }
         }
         .tint(.white)
+    }
+}
+
+
+/// Lightweight waveform shown ONLY while local speech synthesis is running.
+/// A single Canvas redraws at most 24 times per second (no individual animated
+/// SwiftUI views for each bar). Motion is reduced for accessibility.
+private struct LocalSynthesisWave: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(Color.green.opacity(0.17))
+                .frame(width: 180, height: 28)
+                .blur(radius: 20)
+
+            TimelineView(.animation(
+                minimumInterval: reduceMotion ? 1 : 1.0 / 24.0,
+                paused: reduceMotion
+            )) { timeline in
+                Canvas(opaque: false) { context, size in
+                    let barCount = 43
+                    let spacing = size.width / CGFloat(barCount)
+                    let barWidth = min(3.2, spacing * 0.57)
+                    let phase = reduceMotion
+                        ? 0.0
+                        : timeline.date.timeIntervalSinceReferenceDate
+                    for index in 0..<barCount {
+                        let position = Double(index)
+                        let centre = Double(barCount - 1) / 2.0
+                        let envelope = pow(max(0.10, 1.0 - abs(position - centre) / (centre + 1)), 1.55)
+                        let amplitude = abs(sin(phase * 2.4 + position * 0.83) *
+                                            cos(phase * 1.35 + position * 0.27))
+                        let height = CGFloat(4.5 + envelope * (13.0 + amplitude * 60.0))
+                        let x = CGFloat(index) * spacing + (spacing - barWidth) / 2
+                        let y = (size.height - height) / 2
+                        let rect = CGRect(x: x, y: y, width: barWidth, height: height)
+                        let opacity = 0.42 + envelope * 0.58
+                        context.fill(
+                            Path(roundedRect: rect, cornerRadius: barWidth / 2),
+                            with: .color(Color(red: 0.31, green: 0.88, blue: 0.49)
+                                .opacity(opacity))
+                        )
+                    }
+                }
+            }
+        }
     }
 }
