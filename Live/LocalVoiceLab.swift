@@ -15,6 +15,8 @@ final class LocalVoiceLab: ObservableObject {
     @Published private(set) var modelOnDisk = false
     @Published private(set) var loaded = false
     @Published private(set) var isRecording = false
+    @Published private(set) var recordingElapsed: TimeInterval = 0
+    static let recordingLimit: TimeInterval = 30
     @Published private(set) var hasReference = false
     @Published private(set) var hasVoice = false
     @Published private(set) var outputURL: URL?
@@ -26,6 +28,7 @@ final class LocalVoiceLab: ObservableObject {
     private let maxReferenceSize = 25 * 1_024 * 1_024
     private var model: ChatterboxCoreMLModel?
     private var recorder: AVAudioRecorder?
+    private var recordingClock: Task<Void, Never>?
     private var referenceURL: URL?
     private var player: AVAudioPlayer?
     private var task: Task<Void, Never>?
@@ -89,7 +92,7 @@ final class LocalVoiceLab: ObservableObject {
                 try Task.checkCancellation()
                 self.model = loadedModel
                 self.loaded = true
-                self.status = "Модель готова. Запиши 15–20 секунд голоса."
+                self.status = "Модель готова. Для копии голоса используется до 20 секунд речи."
             } catch is CancellationError {
                 self.status = "Загрузка модели отменена."
             } catch {
@@ -131,10 +134,30 @@ final class LocalVoiceLab: ObservableObject {
                 AVEncoderAudioQualityKey: AVAudioQuality.high.rawValue
             ]
             let audio = try AVAudioRecorder(url: file, settings: settings)
-            guard audio.record() else { throw VoiceLabError.recordingFailed }
+            // The recorder itself enforces the 30-second deadline even when UI
+            // animation is delayed or the device briefly suspends the view.
+            guard audio.record(forDuration: Self.recordingLimit) else {
+                throw VoiceLabError.recordingFailed
+            }
             recorder = audio
             isRecording = true
-            status = "Записываю. Говори выразительно около 20 секунд, затем останови."
+            recordingElapsed = 0
+            status = "Идёт запись. Автостоп через 30 секунд."
+            recordingClock?.cancel()
+            recordingClock = Task { [weak self] in
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .milliseconds(100)) }
+                    catch { return }
+                    guard let self, self.isRecording else { return }
+                    self.recordingElapsed = min(audio.currentTime, Self.recordingLimit)
+                    // A manual stop or AVAudioRecorder's own duration limit
+                    // must both finalize the sample and update the UI.
+                    if !audio.isRecording || audio.currentTime >= Self.recordingLimit {
+                        self.stopRecording()
+                        return
+                    }
+                }
+            }
         } catch {
             status = "Микрофон: \(error.localizedDescription)"
         }
@@ -142,10 +165,13 @@ final class LocalVoiceLab: ObservableObject {
 
     private func stopRecording() {
         guard let audio = recorder else { return }
-        let recordedDuration = audio.currentTime
+        let recordedDuration = max(recordingElapsed, audio.currentTime)
+        recordingClock?.cancel()
+        recordingClock = nil
         audio.stop()
         recorder = nil
         isRecording = false
+        recordingElapsed = 0
         try? AVAudioSession.sharedInstance().setActive(false)
         guard recordedDuration >= 10 else {
             try? FileManager.default.removeItem(at: audio.url)
@@ -286,11 +312,14 @@ final class LocalVoiceLab: ObservableObject {
     func cleanup() {
         task?.cancel()
         stopPlayback()
+        recordingClock?.cancel()
+        recordingClock = nil
         if let recorder {
             recorder.stop()
             self.recorder = nil
         }
         isRecording = false
+        recordingElapsed = 0
         removeOldReference()
         try? AVAudioSession.sharedInstance().setActive(false)
     }
@@ -319,6 +348,7 @@ struct LocalVoiceLabView: View {
     @StateObject private var engine = LocalVoiceLab()
     @State private var language = "ru"
     @State private var phrase = VoiceSynthesisLanguage.sample(for: "ru") ?? ""
+    @FocusState private var textEditorFocused: Bool
     @State private var importing = false
     @State private var confirmingVoiceDeletion = false
 
@@ -343,8 +373,27 @@ struct LocalVoiceLabView: View {
                 }
                 Section("Мой голос") {
                     Button(engine.isRecording ? "Остановить запись" : "Записать мой голос") {
+                        textEditorFocused = false
                         engine.startOrStopRecording()
                     }.disabled(engine.busy)
+                    if engine.isRecording {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack {
+                                Label("Запись", systemImage: "record.circle")
+                                    .foregroundStyle(.red)
+                                Spacer()
+                                Text(String(format: "%02d:%02d / 00:30",
+                                            Int(engine.recordingElapsed) / 60,
+                                            Int(engine.recordingElapsed) % 60))
+                                    .monospacedDigit()
+                            }
+                            .font(.subheadline.weight(.semibold))
+                            ProgressView(value: engine.recordingElapsed,
+                                         total: LocalVoiceLab.recordingLimit)
+                                .tint(.red)
+                        }
+                        .accessibilityElement(children: .combine)
+                    }
                     Button("Импортировать аудиофайл") { importing = true }
                         .disabled(engine.busy || engine.isRecording)
                     if engine.hasReference {
@@ -375,8 +424,11 @@ struct LocalVoiceLabView: View {
                             phrase = VoiceSynthesisLanguage.sample(for: newValue) ?? phrase
                         }
                     }
-                    TextEditor(text: $phrase).frame(minHeight: 86)
+                    TextEditor(text: $phrase)
+                        .focused($textEditorFocused)
+                        .frame(minHeight: 86)
                     Button("Озвучить моим голосом") {
+                        textEditorFocused = false
                         engine.speak(phrase, language: language)
                     }.disabled(engine.busy || !engine.loaded || !engine.hasVoice)
                     if engine.outputURL != nil {
@@ -391,10 +443,21 @@ struct LocalVoiceLabView: View {
                     Text(engine.status).font(.footnote)
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
             .navigationTitle("Текст → голос")
-            .toolbar { ToolbarItem(placement: .confirmationAction) {
-                Button("Готово") { dismiss() }
-            } }
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Готово") {
+                        textEditorFocused = false
+                        dismiss()
+                    }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Готово") { textEditorFocused = false }
+                        .fontWeight(.semibold)
+                }
+            }
             .fileImporter(isPresented: $importing,
                           allowedContentTypes: [.audio, .mpeg4Audio, .wav, .mp3]) { result in
                 if case .success(let url) = result { engine.importReference(url) }
@@ -403,7 +466,10 @@ struct LocalVoiceLabView: View {
                                 isPresented: $confirmingVoiceDeletion) {
                 Button("Удалить голос", role: .destructive) { engine.deleteVoice() }
             }
-            .onDisappear { engine.cleanup() }
+            .onDisappear {
+                textEditorFocused = false
+                engine.cleanup()
+            }
         }
         .tint(.white)
     }
