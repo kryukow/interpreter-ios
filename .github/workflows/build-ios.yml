@@ -59,6 +59,14 @@ jobs:
           assert 'AVAudioFile(forReading:' in clip
           assert 'AVAudioFile(' in clip and 'forWriting: temporaryURL' in clip
           print('Safe voice reference clipping before Core ML enabled')
+          assert 'audio.record(forDuration: Self.recordingLimit)' in voice_lab
+          assert 'recordingClock = Task' in voice_lab
+          assert 'ProgressView(value: engine.recordingElapsed' in voice_lab
+          assert '.scrollDismissesKeyboard(.interactively)' in voice_lab
+          assert '@FocusState private var textEditorFocused' in voice_lab
+          assert 'ToolbarItemGroup(placement: .keyboard)' in voice_lab
+          assert 'Button("Готово") { textEditorFocused = false }' in voice_lab
+          print('Recording auto-stop, visible timer and keyboard dismissal wired')
           print('Compact dual-action homepage and validated TTS languages')
           print('UIKit copy-mode document picker wired for both import paths')
           print('Fresh Live sources only; shared icon assets permitted')
@@ -82,8 +90,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.5'
-          assert info['CFBundleVersion'] == '15'
+          assert info['CFBundleShortVersionString'] == '1.4.6'
+          assert info['CFBundleVersion'] == '16'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -91,11 +99,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.5-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.5-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.6-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.6-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.5-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.5-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.6-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.6-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
