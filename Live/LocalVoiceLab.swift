@@ -216,8 +216,8 @@ final class LocalVoiceLab: ObservableObject {
     func speak(_ text: String, language: String) {
         let phrase = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !busy, let model, hasVoice, !phrase.isEmpty else { return }
-        guard ["ru", "de"].contains(language), phrase.count <= 500 else {
-            status = "Выбери язык и введи текст длиной до 500 символов."
+        guard VoiceSynthesisLanguage.supports(language), phrase.count <= 500 else {
+            status = "Выбери язык и введи текст до 500 символов."
             return
         }
         busy = true
@@ -305,21 +305,14 @@ struct LocalVoiceLabView: View {
     @Environment(\.dismiss) private var dismiss
     @StateObject private var engine = LocalVoiceLab()
     @State private var language = "ru"
-    @State private var phrase = "Привет! Это мой собственный голос, созданный нейросетью прямо на айфоне."
+    @State private var phrase = VoiceSynthesisLanguage.sample(for: "ru") ?? ""
     @State private var importing = false
     @State private var confirmingVoiceDeletion = false
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Экспериментальный режим") {
-                    Text("Твой голос создаётся и хранится на iPhone. Рабочий перевод OpenAI не изменяется.")
-                    Text("Для первого запуска нужно вручную скачать большую модель Core ML через интернет. Файлы модели хранятся в памяти iPhone; синтез после загрузки работает локально.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Text("Реализация Core ML экспериментальная: на iPhone 16 Pro скорость, нагрев и сходство голоса предстоит проверить.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Section("1 · Модель") {
+                Section("Модель") {
                     if engine.modelOnDisk {
                         Label("Файлы модели найдены", systemImage: "checkmark.circle")
                             .foregroundStyle(.green)
@@ -335,9 +328,7 @@ struct LocalVoiceLabView: View {
                     }
                     if engine.loaded { Label("Модель готова", systemImage: "checkmark.circle").foregroundStyle(.green) }
                 }
-                Section("2 · Образец голоса") {
-                    Text("Запиши 25–30 секунд собственной выразительной речи в тихом помещении. Или импортируй подходящую запись из «Файлов».")
-                        .font(.footnote).foregroundStyle(.secondary)
+                Section("Мой голос") {
                     Button(engine.isRecording ? "Остановить запись" : "Записать мой голос") {
                         engine.startOrStopRecording()
                     }.disabled(engine.busy)
@@ -357,16 +348,20 @@ struct LocalVoiceLabView: View {
                         }.disabled(engine.busy)
                     }
                 }
-                Section("3 · Проверка озвучивания") {
-                    Picker("Язык", selection: $language) {
-                        Text("Русский").tag("ru")
-                        Text("Deutsch").tag("de")
-                    }.pickerStyle(.segmented)
-                        .onChange(of: language) { _, newValue in
-                            phrase = newValue == "ru"
-                                ? "Привет! Это мой собственный голос, созданный нейросетью прямо на айфоне."
-                                : "Guten Morgen! Ich teste meine eigene Stimme auf Deutsch."
+                Section("Озвучивание") {
+                    Picker("Язык озвучивания", selection: $language) {
+                        ForEach(VoiceSynthesisLanguage.all) { item in
+                            Text(item.name).tag(item.code)
                         }
+                    }
+                    .pickerStyle(.menu)
+                    .onChange(of: language) { oldValue, newValue in
+                        // Preserve custom text; replace only the old demonstration phrase.
+                        let previousSample = VoiceSynthesisLanguage.sample(for: oldValue)
+                        if phrase.isEmpty || phrase == previousSample {
+                            phrase = VoiceSynthesisLanguage.sample(for: newValue) ?? phrase
+                        }
+                    }
                     TextEditor(text: $phrase).frame(minHeight: 86)
                     Button("Озвучить моим голосом") {
                         engine.speak(phrase, language: language)
@@ -382,14 +377,8 @@ struct LocalVoiceLabView: View {
                     if engine.busy { ProgressView() }
                     Text(engine.status).font(.footnote)
                 }
-                Section {
-                    Text("Используй только собственный голос или голос человека с разрешением. Не выдавай синтезированную речь за настоящую запись.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                    Link("Chatterbox Core ML · исходный код",
-                         destination: URL(string: "https://github.com/iliasaz/chatterbox-coreml")!)
-                }
             }
-            .navigationTitle("Мой голос · тест")
+            .navigationTitle("Текст → голос")
             .toolbar { ToolbarItem(placement: .confirmationAction) {
                 Button("Готово") { dismiss() }
             } }
