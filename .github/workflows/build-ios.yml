@@ -64,8 +64,16 @@ jobs:
           assert 'ProgressView(value: engine.recordingElapsed' in voice_lab
           assert '.scrollDismissesKeyboard(.interactively)' in voice_lab
           assert '@FocusState private var textEditorFocused' in voice_lab
-          assert 'ToolbarItemGroup(placement: .keyboard)' in voice_lab
-          assert 'Button("Готово") { textEditorFocused = false }' in voice_lab
+          assert 'ToolbarItemGroup(placement: .keyboard)' not in voice_lab
+          assert 'Button("Готово") { textEditorFocused = false }' not in voice_lab
+          assert 'ToolbarItem(placement: .confirmationAction)' in voice_lab
+          assert 'Button("Готово") {' in voice_lab
+          assert 'LocalSynthesisWave()' in voice_lab
+          assert 'private struct LocalSynthesisWave: View' in voice_lab
+          assert 'TimelineView(.animation(' in voice_lab
+          assert 'if engine.isSynthesizing {' in voice_lab
+          assert '.safeAreaInset(edge: .bottom, spacing: 0)' in voice_lab
+          assert 'Section {\n                    HStack {\n                        Spacer()\n                        Text("Chatterbox Multilingual' not in voice_lab
           print('Recording auto-stop, visible timer and keyboard dismissal wired')
           assert '@StateObject private var voiceLab = LocalVoiceLab()' in app
           assert 'LocalVoiceLabView(engine: voiceLab)' in app
@@ -104,8 +112,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.7'
-          assert info['CFBundleVersion'] == '17'
+          assert info['CFBundleShortVersionString'] == '1.4.8'
+          assert info['CFBundleVersion'] == '18'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -113,11 +121,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.7-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.7-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.8-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.8-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.7-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.7-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.8-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.8-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
