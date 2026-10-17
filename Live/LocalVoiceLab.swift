@@ -330,6 +330,32 @@ final class LocalVoiceLab: ObservableObject {
 
     func stopPlayback() { player?.stop(); player = nil }
 
+    /// Replay the completed WAV already stored on the iPhone; no extra voice
+    /// generation or OpenAI API request. Each tap restarts the clip at 0:00.
+    func replayLastAudio() {
+        guard !busy, let outputURL else { return }
+        guard FileManager.default.fileExists(atPath: outputURL.path) else {
+            self.outputURL = nil
+            stopPlayback()
+            status = "Аудиофайл больше недоступен. Озвучь текст повторно."
+            return
+        }
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio)
+            try session.setActive(true)
+            stopPlayback()
+            let replay = try AVAudioPlayer(contentsOf: outputURL)
+            replay.currentTime = 0
+            replay.prepareToPlay()
+            guard replay.play() else { throw VoiceLabError.playbackFailed }
+            player = replay
+            status = "Повторно воспроизвожу готовое аудио."
+        } catch {
+            status = "Не удалось воспроизвести аудио: \(error.localizedDescription)"
+        }
+    }
+
     func deleteVoice() {
         guard !busy else { return }
         do {
@@ -481,7 +507,7 @@ struct LocalVoiceLabView: View {
                         }.disabled(engine.busy)
                     }
                 }
-                Section("Озвучивание") {
+                Section {
                     Picker("Язык озвучивания", selection: $language) {
                         ForEach(VoiceSynthesisLanguage.all) { item in
                             Text(item.name).tag(item.code)
@@ -503,13 +529,29 @@ struct LocalVoiceLabView: View {
                         engine.speak(phrase, language: language)
                     }.disabled(engine.busy || !engine.loaded || !engine.hasVoice)
                     if engine.outputURL != nil {
-                        Button("Остановить воспроизведение") { engine.stopPlayback() }
+                        Button("Повторить аудио") {
+                            engine.replayLastAudio()
+                        }
+                        .disabled(engine.busy)
                     }
                     if let output = engine.outputURL {
-                        ShareLink(item: output, preview: SharePreview("Interpreter · Мой голос"))
+                        ShareLink(item: output, preview: SharePreview("Interpreter · Мой голос")) {
+                            Label("Сохранить / отправить", systemImage: "square.and.arrow.up")
+                        }
+                    }
+                } header: {
+                    HStack(spacing: 10) {
+                        Text("Озвучивание")
+                        Spacer(minLength: 8)
+                        if engine.isSynthesizing {
+                            LocalSynthesisHeaderMotion()
+                                .frame(width: 96, height: 20)
+                                .accessibilityHidden(true)
+                                .transition(.opacity)
+                        }
                     }
                 }
-                Section("Состояние") {
+                Section {
                     if engine.isSynthesizing {
                         VStack(alignment: .leading, spacing: 5) {
                             HStack(alignment: .center) {
@@ -544,20 +586,20 @@ struct LocalVoiceLabView: View {
                         if engine.busy { ProgressView() }
                         Text(engine.status).font(.footnote)
                     }
+                } header: {
+                    Text("Состояние")
+                } footer: {
+                    Text("Chatterbox Multilingual · Core ML · локально на iPhone")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 10)
+                        .padding(.bottom, 12)
+                        .accessibilityLabel("Локальная модель Chatterbox Multilingual, Core ML")
                 }
             }
             .scrollDismissesKeyboard(.interactively)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                Text("Chatterbox Multilingual · Core ML · локально на iPhone")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 9)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    .accessibilityLabel("Локальная модель Chatterbox Multilingual, Core ML")
-            }
             .navigationTitle("Текст → голос")
             .toolbar {
                 ToolbarItem(placement: .confirmationAction) {
@@ -628,6 +670,42 @@ private struct LocalSynthesisWave: View {
                     }
                 }
             }
+        }
+    }
+}
+
+
+/// Subtle header progress indicator, independent of the audio waveform below.
+/// The small signal moves back and forth only while synthesis is active.
+private struct LocalSynthesisHeaderMotion: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        TimelineView(.animation(
+            minimumInterval: reduceMotion ? 1 : 1.0 / 24.0,
+            paused: reduceMotion
+        )) { timeline in
+            let phase = reduceMotion
+                ? 0.0
+                : timeline.date.timeIntervalSinceReferenceDate
+            let position = 0.5 + 0.5 * sin(phase * 2.3)
+            ZStack(alignment: .leading) {
+                Capsule()
+                    .fill(Color.green.opacity(0.28))
+                    .frame(height: 2)
+                    .padding(.horizontal, 4)
+                HStack(spacing: 2) {
+                    Image(systemName: "waveform")
+                        .font(.system(size: 13, weight: .medium))
+                    Circle()
+                        .frame(width: 3, height: 3)
+                }
+                .foregroundStyle(.green)
+                .shadow(color: .green.opacity(0.65), radius: 6)
+                .frame(width: 27, height: 18)
+                .offset(x: CGFloat(position) * 69)
+            }
+            .frame(width: 96, height: 20)
         }
     }
 }
