@@ -548,9 +548,6 @@ struct LocalVoiceLabView: View {
                                 .transition(.opacity)
                         }
                     }
-                }
-                Section {
-                    EmptyView()
                 } footer: {
                     Text("Chatterbox Multilingual · Core ML · локально на iPhone")
                         .font(.caption2)
