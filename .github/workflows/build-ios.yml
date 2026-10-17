@@ -72,8 +72,18 @@ jobs:
           assert 'private struct LocalSynthesisWave: View' in voice_lab
           assert 'TimelineView(.animation(' in voice_lab
           assert 'if engine.isSynthesizing {' in voice_lab
-          assert '.safeAreaInset(edge: .bottom, spacing: 0)' in voice_lab
-          assert 'Section {\n                    HStack {\n                        Spacer()\n                        Text("Chatterbox Multilingual' not in voice_lab
+          assert '.safeAreaInset(edge: .bottom, spacing: 0)' not in voice_lab
+          assert 'footer: {' in voice_lab
+          assert 'Text("Chatterbox Multilingual · Core ML · локально на iPhone")' in voice_lab
+          assert 'LocalSynthesisHeaderMotion()' in voice_lab
+          assert 'private struct LocalSynthesisHeaderMotion: View' in voice_lab
+          assert 'if engine.isSynthesizing {' in voice_lab
+          assert 'Button("Повторить аудио")' in voice_lab
+          assert 'engine.replayLastAudio()' in voice_lab
+          assert 'func replayLastAudio()' in voice_lab
+          assert 'AVAudioPlayer(contentsOf: outputURL)' in voice_lab
+          assert 'Button("Остановить воспроизведение")' not in voice_lab
+          print('Scrolling unframed model attribution, header motion, and replayable WAV validated')
           print('Recording auto-stop, visible timer and keyboard dismissal wired')
           assert '@StateObject private var voiceLab = LocalVoiceLab()' in app
           assert 'LocalVoiceLabView(engine: voiceLab)' in app
@@ -112,8 +122,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.8'
-          assert info['CFBundleVersion'] == '18'
+          assert info['CFBundleShortVersionString'] == '1.4.9'
+          assert info['CFBundleVersion'] == '19'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -121,11 +131,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.8-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.8-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.9-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.9-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.8-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.8-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.9-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.9-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
