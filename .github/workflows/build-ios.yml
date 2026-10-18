@@ -43,6 +43,23 @@ jobs:
         run: |
           swiftc Live/VoiceSynthesisLanguage.swift Live/VoiceTextProcessingPolicy.swift LiveTests/test_proofreading.swift -o "$RUNNER_TEMP/live-proofreading-tests"
           "$RUNNER_TEMP/live-proofreading-tests"
+      - name: Confirm WebRTC experiment isolation
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          protocol = Path("Live/WebRTCTranslationExperiment.swift").read_text()
+          view = Path("Live/WebRTCExperimentView.swift").read_text()
+          app = Path("Live/LiveApp.swift").read_text()
+          assert "/v1/realtime/translations/client_secrets" in protocol
+          assert "/v1/realtime/translations/calls" in protocol
+          assert 'RTCDataBuffer(' in protocol and '"session.close"' in protocol
+          assert 'microphoneTrack?.isEnabled = false' in protocol
+          assert 'microphoneTrack?.isEnabled = true' in protocol
+          assert 'showWebRTCExperiment' in app and 'WebRTCExperimentView()' in app
+          assert 'WebRTC' in Path("Live/project.yml").read_text()
+          assert 'TranslationConnection()' in Path("Live/LiveSession.swift").read_text()
+          print("WebRTC experiment isolated from production WebSocket mode")
+          PY
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate completely separate Live project
@@ -176,8 +193,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.17'
-          assert info['CFBundleVersion'] == '27'
+          assert info['CFBundleShortVersionString'] == '1.4.18'
+          assert info['CFBundleVersion'] == '28'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -185,11 +202,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.17-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.17-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.18-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.18-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.17-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.17-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.18-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.18-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
