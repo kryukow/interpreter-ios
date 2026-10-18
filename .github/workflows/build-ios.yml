@@ -51,6 +51,10 @@ jobs:
         run: |
           swiftc Live/WebRTCAudioDrainMonitor.swift LiveTests/test_webrtc_audio_drain_monitor.swift -o "$RUNNER_TEMP/webrtc-audio-drain-tests"
           "$RUNNER_TEMP/webrtc-audio-drain-tests"
+      - name: Test identical language directions for both transport modes
+        run: |
+          swiftc Live/PartnerLanguage.swift Live/LiveTransport.swift LiveTests/test_home_transport.swift -o "$RUNNER_TEMP/home-transport-tests"
+          "$RUNNER_TEMP/home-transport-tests"
       - name: Test WebRTC translation handshake and secret parsing
         run: |
           swiftc Live/WebRTCTranslationProtocol.swift LiveTests/test_webrtc_translation_protocol.swift -o "$RUNNER_TEMP/webrtc-translation-tests"
@@ -68,7 +72,24 @@ jobs:
           assert 'RTCDataBuffer(' in protocol and '"session.close"' in protocol
           assert 'microphoneTrack?.isEnabled = false' in protocol
           assert 'microphoneTrack?.isEnabled = true' in protocol
-          assert 'showWebRTCExperiment' in app and 'WebRTCExperimentView()' in app
+          assert '@StateObject private var rtc = WebRTCTranslationExperiment()' in app
+          assert '@AppStorage("live.connectionTransport")' in app
+          assert 'showWebRTCExperiment' not in app
+          assert 'Text("WebSocket").tag(LiveTransport.webSocket.rawValue)' in app
+          assert 'Text("WebRTC").tag(LiveTransport.webRTC.rawValue)' in app
+          assert 'beginRTCTurn(source: language)' in app
+          assert 'endRTCTurn(source: language)' in app
+          assert 'model.begin(language, partner: partner.rawValue)' in app
+          assert 'model.end(language)' in app
+          assert 'rtcHeld == source' in app
+          assert 'rtc.phase == .connecting && rtcHeld != nil' in app
+          assert 'if phase == .ready, rtcHeld != nil, usingWebRTC' in app
+          assert 'rtc.beginSpeaking()' in app
+          assert 'rtc.endSpeaking()' in app
+          assert 'rtc.connect(target: target)' in app
+          assert 'LiveTranslationDirection.output(forSource: source, partner: partner)' in app
+          assert 'rtc.disconnect()' in app
+          print("Main UI matches both transports with no extra connect button")
           assert 'WebRTC' in Path("Live/project.yml").read_text()
           assert 'TranslationConnection()' in Path("Live/LiveSession.swift").read_text()
           routing = Path("Live/WebRTCTranslationExperiment.swift").read_text()
@@ -233,8 +254,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.21'
-          assert info['CFBundleVersion'] == '31'
+          assert info['CFBundleShortVersionString'] == '1.4.22'
+          assert info['CFBundleVersion'] == '32'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -242,11 +263,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.21-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.21-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.22-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.22-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.21-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.21-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.22-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.22-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
