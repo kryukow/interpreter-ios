@@ -462,10 +462,14 @@ struct LocalVoiceLabView: View {
     private var needsProofreading: Bool { processingMode == .proofreadRussian }
     private var needsTextProcessing: Bool { processingMode != .unchanged }
 
-    private var translationReady: Bool {
-        !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+    private var processedResultAvailable: Bool {
         translatedSource == phrase && translatedLanguage == language &&
         translatedModel == chatModel && !translating
+    }
+
+    private var translationReady: Bool {
+        processedResultAvailable &&
+        !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var textForSpeech: String {
@@ -622,7 +626,7 @@ struct LocalVoiceLabView: View {
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            if translationReady {
+                            if processedResultAvailable {
                                 Text(needsProofreading ? "Исправленный текст" :
                                      "Перевод · \(VoiceSynthesisLanguage.all.first(where: { $0.code == language })?.name ?? language)")
                                     .font(.caption.weight(.medium))
