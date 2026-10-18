@@ -71,52 +71,80 @@ struct WebRTCExperimentView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color(white: 0.12), in: RoundedRectangle(cornerRadius: 14))
 
-                HStack {
-                    Button {
-                        engine.connect(target: target)
-                    } label: {
-                        Label("Подключить WebRTC", systemImage: "network")
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(engine.phase == .connecting || engine.phase == .ready ||
-                              engine.phase == .speaking || engine.phase == .finishing)
-                    Spacer()
-                    Button("Отключить") { engine.disconnect() }
+                if engine.phase == .connecting || engine.phase == .ready ||
+                    engine.phase == .speaking || engine.phase == .finishing {
+                    HStack {
+                        Spacer()
+                        Button("Отключить") {
+                            holding = false
+                            engine.disconnect()
+                        }
                         .buttonStyle(.bordered)
+                    }
                 }
 
-                Text(engine.playbackAfterRelease
-                    ? "После подключения удерживай кнопку и говори. Во время записи ответ OpenAI складывается в локальный PCM-буфер. Отпускаешь — звук воспроизводится с начала."
-                    : "После подключения удерживай кнопку. Перевод звучит параллельно речи. Отпускание отправляет session.close.")
+                Text(engine.phase == .finished
+                    ? "Для новой фразы нажми большую кнопку. Создадим новый сеанс только по твоему действию — без автоматических подключений и лишнего времени API."
+                    : engine.phase == .finishing
+                    ? "Подожди окончания звука. Если WebRTC перестал воспроизводить очередь, ожидание автоматически завершится."
+                    : engine.playbackAfterRelease
+                    ? "Подключись большой кнопкой, затем удерживай микрофон и говори. После отпускания перевод воспроизводится с начала."
+                    : "Подключись большой кнопкой, затем удерживай микрофон и говори. В живом режиме перевод может звучать одновременно с речью.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                ZStack {
-                    RoundedRectangle(cornerRadius: 24)
-                        .fill(engine.isSpeaking ? Color(red: 0.38, green: 0.13, blue: 0.16)
-                              : Color(white: 0.18))
-                    VStack(spacing: 9) {
-                        Image(systemName: engine.isSpeaking ? "waveform" : "mic")
-                            .font(.system(size: 31, weight: .medium))
-                        Text(engine.isSpeaking ? "ГОВОРИ" : "УДЕРЖИВАЙ ДЛЯ РЕЧИ")
-                            .font(.subheadline.bold())
-                    }
-                }
-                .frame(height: 132)
-                .opacity(engine.canTalk || engine.isSpeaking ? 1 : 0.4)
-                .contentShape(RoundedRectangle(cornerRadius: 24))
-                .onLongPressGesture(minimumDuration: 0, maximumDistance: 130,
-                                    pressing: { pressed in
-                    if !pressed {
-                        if holding {
-                            holding = false
-                            engine.endSpeaking()
+                if engine.phase == .finished || engine.phase == .failed || engine.phase == .idle {
+                    Button {
+                        holding = false
+                        engine.connect(target: target)
+                    } label: {
+                        VStack(spacing: 9) {
+                            Image(systemName: engine.phase == .finished
+                                ? "arrow.clockwise.circle" : "network")
+                                .font(.system(size: 32, weight: .medium))
+                            Text(engine.phase == .finished ? "НОВАЯ ФРАЗА" :
+                                 engine.phase == .failed ? "ПОВТОРИТЬ ПОДКЛЮЧЕНИЕ" :
+                                 "ПОДКЛЮЧИТЬ WEBRTC")
+                                .font(.subheadline.bold())
                         }
-                    } else if engine.canTalk && !holding {
-                        holding = true
-                        engine.beginSpeaking()
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 132)
+                        .background(Color(white: 0.18), in: RoundedRectangle(cornerRadius: 24))
+                        .contentShape(RoundedRectangle(cornerRadius: 24))
                     }
-                }, perform: {})
+                    .buttonStyle(.plain)
+                    .accessibilityHint("Начинает новое подключение для следующей фразы")
+                } else {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 24)
+                            .fill(engine.isSpeaking ? Color(red: 0.38, green: 0.13, blue: 0.16)
+                                  : Color(white: 0.18))
+                        VStack(spacing: 9) {
+                            Image(systemName: engine.isSpeaking ? "waveform" : "mic")
+                                .font(.system(size: 31, weight: .medium))
+                            Text(engine.isSpeaking ? "ГОВОРИ" :
+                                 engine.phase == .finishing ? "ВОСПРОИЗВОЖУ ПЕРЕВОД" :
+                                 engine.phase == .connecting ? "ПОДКЛЮЧАЮ WEBRTC…" :
+                                 "УДЕРЖИВАЙ ДЛЯ РЕЧИ")
+                                .font(.subheadline.bold())
+                        }
+                    }
+                    .frame(height: 132)
+                    .opacity(engine.canTalk || engine.isSpeaking ? 1 : 0.4)
+                    .contentShape(RoundedRectangle(cornerRadius: 24))
+                    .onLongPressGesture(minimumDuration: 0, maximumDistance: 130,
+                                        pressing: { pressed in
+                        if !pressed {
+                            if holding {
+                                holding = false
+                                engine.endSpeaking()
+                            }
+                        } else if engine.canTalk && !holding {
+                            holding = true
+                            engine.beginSpeaking()
+                        }
+                    }, perform: {})
+                }
 
                 if !engine.transcript.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {

@@ -12,8 +12,8 @@ packages:
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.4.20'
-    CURRENT_PROJECT_VERSION: '30'
+    MARKETING_VERSION: '1.4.21'
+    CURRENT_PROJECT_VERSION: '31'
     TARGETED_DEVICE_FAMILY: '1'
 targets:
   InterpreterLive:

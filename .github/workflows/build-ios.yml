@@ -47,6 +47,10 @@ jobs:
         run: |
           swiftc Live/WebRTCDelayedAudioGate.swift LiveTests/test_webrtc_delayed_audio_gate.swift -o "$RUNNER_TEMP/webrtc-audio-gate-tests"
           "$RUNNER_TEMP/webrtc-audio-gate-tests"
+      - name: Test WebRTC audio drain completion and next phrase
+        run: |
+          swiftc Live/WebRTCAudioDrainMonitor.swift LiveTests/test_webrtc_audio_drain_monitor.swift -o "$RUNNER_TEMP/webrtc-audio-drain-tests"
+          "$RUNNER_TEMP/webrtc-audio-drain-tests"
       - name: Test WebRTC translation handshake and secret parsing
         run: |
           swiftc Live/WebRTCTranslationProtocol.swift LiveTests/test_webrtc_translation_protocol.swift -o "$RUNNER_TEMP/webrtc-translation-tests"
@@ -83,8 +87,18 @@ jobs:
           assert "audioGate.process(" in custom
           assert "playbackAfterRelease" in protocol
           assert "BufferedWebRTCAudioDevice(gate:" in protocol
-          assert "self.delayedGate.pendingBytes > 0" in protocol
+          assert "pendingBytes: self.delayedGate.pendingBytes" in protocol
           print("WebRTC full-audio delayed playout follows Push-to-Talk release")
+          drain = Path("Live/WebRTCAudioDrainMonitor.swift").read_text()
+          assert "case stalled(remainingBytes: Int)" in drain
+          assert "maxDuration: TimeInterval = 80" in drain
+          assert "self.phase = .finished" in protocol
+          assert "WebRTCAudioDrainMonitor(" in protocol
+          assert "case .stalled(let remaining)" in protocol
+          assert "playback_completion=" in protocol
+          assert "НОВАЯ ФРАЗА" in view and "engine.connect(target: target)" in view
+          assert "if engine.phase == .finished || engine.phase == .failed || engine.phase == .idle" in view
+          print("WebRTC repeat phrases enabled after full/stalled PCM playback")
           PY
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -219,8 +233,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.20'
-          assert info['CFBundleVersion'] == '30'
+          assert info['CFBundleShortVersionString'] == '1.4.21'
+          assert info['CFBundleVersion'] == '31'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -228,11 +242,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.20-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.20-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.21-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.21-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.20-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.20-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.21-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.21-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7

@@ -300,36 +300,67 @@ import WebRTC
             guard transcript.utf8.count + delta.utf8.count < 100_000 else { return }
             transcript += delta
         case "session.closed":
-            // WebRTC may have already delivered several seconds of translated
-            // speech while the microphone was held. Never close the peer
-            // while the delayed PCM queue still contains those syllables.
+            guard phase == .finishing else { return }
+            // The service has finished streaming. WebRTC may stop calling its
+            // audio render callback while delayed PCM is still queued.
+            // A stalled queue must never keep the microphone disabled for 80s.
             microphoneTrack?.isEnabled = false
             diagnostic = summary()
             status = playbackAfterRelease
                 ? "OpenAI закончил · воспроизвожу оставшийся перевод"
-                : "Сеанс завершён · сравни звучание с WebSocket"
+                : "Сеанс завершён · ожидаю окончание воспроизведения"
             let token = generation
             drainTask?.cancel()
             drainTask = Task { [weak self] in
                 guard let self else { return }
+                var drainResult: WebRTCAudioDrainMonitor.Result = .drained
                 if self.playbackAfterRelease {
-                    // Continue hardware playout of already decoded PCM after
-                    // session.closed. No additional API requests are made.
-                    let started = Date()
-                    while self.generation == token &&
-                          self.delayedGate.pendingBytes > 0 &&
-                          Date().timeIntervalSince(started) < 80 {
-                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    var monitor = WebRTCAudioDrainMonitor(
+                        pendingBytes: self.delayedGate.pendingBytes,
+                        at: ProcessInfo.processInfo.systemUptime
+                    )
+                    while self.generation == token && !Task.isCancelled {
+                        drainResult = monitor.observe(
+                            pendingBytes: self.delayedGate.pendingBytes,
+                            at: ProcessInfo.processInfo.systemUptime
+                        )
+                        guard drainResult == .waiting else { break }
+                        do {
+                            try await Task.sleep(nanoseconds: 100_000_000)
+                        } catch {
+                            return
+                        }
                     }
                 } else {
-                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    do {
+                        try await Task.sleep(nanoseconds: 1_500_000_000)
+                    } catch {
+                        return
+                    }
                 }
-                guard self.generation == token else { return }
+                guard self.generation == token, !Task.isCancelled,
+                      self.phase == .finishing else { return }
                 let overflow = self.delayedGate.hasOverflowed
+                let completion: String
+                switch drainResult {
+                case .drained:
+                    completion = "drained"
+                    self.status = overflow
+                        ? "Очередь звука переполнилась · попробуй новую фразу"
+                        : "Перевод завершён · нажми «Новая фраза»"
+                case .stalled(let remaining):
+                    completion = "stalled (\(remaining) bytes remaining)"
+                    self.status = "Воспроизведение остановилось · хвост звука мог пропасть. Нажми «Новая фраза»"
+                case .timedOut(let remaining):
+                    completion = "timeout (\(remaining) bytes remaining)"
+                    self.status = "Время ожидания звука истекло · нажми «Новая фраза»"
+                case .waiting:
+                    // Only possible if an unexpected loop exit occurs.
+                    completion = "interrupted"
+                    self.status = "Воспроизведение прервано · нажми «Новая фраза»"
+                }
+                self.diagnostic += "\nplayback_completion=\(completion)"
                 self.phase = .finished
-                self.status = overflow
-                    ? "Очередь звука переполнена — часть аудио не сохранена"
-                    : "Перевод прозвучал полностью · можно сравнивать"
                 self.events?.delegate = nil
                 self.events?.close()
                 self.peer?.delegate = nil
