@@ -283,6 +283,10 @@ final class BufferedWebRTCAudioDevice: NSObject {
                                             interleaved: true)!
 
           audioOutputFormat = rtcPlayFormat
+          speechGate.setOutputPCMFormat(
+            sampleRate: Int(rtcPlayFormat.sampleRate),
+            channels: Int(rtcPlayFormat.channelCount)
+          )
           inputLatency = audioSession.inputLatency
 
           let getPlayoutData = delegate.getPlayoutData
