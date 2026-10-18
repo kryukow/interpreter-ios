@@ -323,11 +323,13 @@ import WebRTC
                 if self.playbackAfterRelease {
                     var monitor = WebRTCAudioDrainMonitor(
                         pendingBytes: self.delayedGate.pendingBytes,
+                        renderedBytes: self.delayedGate.renderedBytes,
                         at: ProcessInfo.processInfo.systemUptime
                     )
                     while self.generation == token && !Task.isCancelled {
                         drainResult = monitor.observe(
                             pendingBytes: self.delayedGate.pendingBytes,
+                            renderedBytes: self.delayedGate.renderedBytes,
                             at: ProcessInfo.processInfo.systemUptime
                         )
                         guard drainResult == .waiting else { break }
@@ -347,7 +349,7 @@ import WebRTC
                 guard self.generation == token, !Task.isCancelled,
                       self.phase == .finishing else { return }
                 let overflow = self.delayedGate.hasOverflowed
-                self.diagnostic += "\ndrain_result=\(drainResult)"
+                self.diagnostic += "\ndrain_result=\(drainResult)" + "\nrendered_pcm_bytes=\(self.delayedGate.renderedBytes)"
                 // Stop the WebRTC engine first, then atomically extract the
                 // unread FIFO. Calling WebRTC's render callback cannot be
                 // relied upon once session.closed shuts down remote audio.
