@@ -39,6 +39,7 @@ import CryptoKit
     @Published private(set) var recordedWave: Data?
     @Published private(set) var translatedWave: Data?
     @Published private(set) var translationComplete = false
+    @Published private(set) var diagnosticsReport = ""
     @Published var enhanceTranslationPlayback: Bool =
         (UserDefaults.standard.object(forKey: "live.enhanceTranslationPlayback") as? Bool ?? true) {
         didSet { UserDefaults.standard.set(enhanceTranslationPlayback, forKey: "live.enhanceTranslationPlayback") }
@@ -161,6 +162,7 @@ import CryptoKit
         elapsed = 0; levels = Array(repeating: 0, count: 48)
         text = ""; details = ""; recordedWave = nil; translatedWave = nil
         translationComplete = false; streamPlaybackIssue = nil
+        diagnosticsReport = ""
         message = "Готовлю микрофон · пока не говори"
         operation = Task { [weak self] in
             guard let self else { return }
@@ -235,6 +237,9 @@ import CryptoKit
                             self.phase = .waiting
                             self.message = "Запись завершена · ожидаю остаток перевода"
                         }
+                    }, onDiagnostics: { [weak self] report in
+                        guard let self, self.generation == token else { return }
+                        self.diagnosticsReport = report
                     }, onFinished: { [weak self] result in
                         guard let self, self.generation == token else { return }
                         switch result {
@@ -333,6 +338,7 @@ import CryptoKit
         removeShareFile()
         translatedWave = nil; recordedWave = nil; text = ""; details = ""
         translationComplete = false; streamPlaybackIssue = nil
+        diagnosticsReport = ""
         outputLocale = Self.systemVoiceLocale("ru")
         generation = UUID()
         let token = generation
@@ -400,6 +406,9 @@ import CryptoKit
                         self.phase = .waiting
                         self.message = "Ожидаю завершения перевода аудиофайла"
                     }
+                }, onDiagnostics: { [weak self] report in
+                    guard let self, self.generation == token else { return }
+                    self.diagnosticsReport = report
                 }, onFinished: { [weak self] result in
                     guard let self, self.generation == token else { return }
                     switch result {
@@ -495,6 +504,12 @@ import CryptoKit
         }
     }
     /// Always gives access to the untouched response for quality comparison.
+    func copyDiagnostics() {
+        guard !diagnosticsReport.isEmpty else { return }
+        UIPasteboard.general.string = diagnosticsReport
+        message = "Технический журнал скопирован — вставь его в чат OpenAI Support."
+    }
+
     func replayOriginalTranslation() {
         guard let original = translatedWave, !busy else { return }
         livePlayer?.stop()
