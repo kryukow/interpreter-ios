@@ -270,3 +270,27 @@ it into the ongoing OpenAI API Support case. The report is NOT automatically
 uploaded or persisted. It is replaced when the next translation starts.
 The original WAV export and audio processing remain unchanged from 1.4.15.
 The independent Chatterbox model and proofreading remain untouched.
+
+## 1.4.17 (27) — input PCM level measurements only
+
+Following OpenAI API Support's request, the event report now includes the
+microphone's per-200-ms-frame RMS and peak values in dBFS, exact-zero sample
+percentage and diagnostic-only "near-silent" indicator (RMS < -45 dBFS).
+
+The input frames are still transmitted unmodified while Push-to-Talk is held,
+and the last partial frame is still padded only to the usual 200ms boundary.
+No voice activity detection (VAD), automatic end-of-speech gating, shortening,
+muting, or transmission interruption has been implemented. Releasing the button
+remains the **only** normal end-of-input trigger.
+
+The diagnostic report includes the first five input frames, sent frames around
+the wall-clock arrival window of the longest silent translated audio run, and
+the final fifteen input frames before `session.close`. Input and output audio
+sample offsets cannot be assumed to align directly. The input levels are
+observational, not evidence of causal mapping by themselves.
+No content audio or text is retained in the diagnostic report.
+
+To report a new failure: make one Russian-to-German push-to-talk translation,
+leave the conversation untouched, tap **Скопировать журнал для OpenAI Support**,
+and paste the report into the current support thread. An original output WAV
+can be exported separately if needed.
