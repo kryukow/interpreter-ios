@@ -17,6 +17,8 @@ import Foundation
         let b: [UInt8] = [30,0,40,0]
         check(frame(gate,a) == a, "Direct-mode audio was changed")
         gate.startCapture()
+        check(frame(gate,[0,0,0,0]) == [0,0,0,0], "Leading silence leaked")
+        check(gate.pendingBytes == 0, "Leading silence should not delay first word")
         check(frame(gate,a) == [0,0,0,0], "Audio leaked while speaking")
         check(frame(gate,b) == [0,0,0,0], "Second audio leaked while speaking")
         check(gate.pendingBytes == 8, "Buffered audio missing")
