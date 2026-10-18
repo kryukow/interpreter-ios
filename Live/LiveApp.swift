@@ -535,6 +535,7 @@ struct LiveSettings: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("live.keepAwake") private var keepAwake = true
     @AppStorage("live.voiceWarmupEnabled") private var voiceWarmupEnabled = true
+    @AppStorage("live.russianProofreadingEnabled") private var russianProofreadingEnabled = true
     @State private var key = ""
     @State private var balance = ""
     @State private var notice = ""
@@ -587,6 +588,12 @@ struct LiveSettings: View {
                 Section("Экран") { Toggle("Экран всегда включён", isOn: $keepAwake) }
                 Section("Локальная модель") {
                     Toggle("Подготавливать мой голос при запуске", isOn: $voiceWarmupEnabled)
+                }
+                Section("Текст → голос") {
+                    Toggle("Исправлять русский перед озвучиванием", isOn: $russianProofreadingEnabled)
+                    Text("Исправленный текст можно проверить и изменить перед озвучиванием. Оригинал сохраняется. Корректура использует лимиты подключённого ChatGPT.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
                 }
                 Section("Формат передачи аудио") {
                     Text("PCM16 · 24 кГц · моно · порции по 200 мс").font(.footnote)

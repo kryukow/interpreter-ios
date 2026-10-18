@@ -19,6 +19,10 @@ jobs:
         run: |
           swiftc Live/TranslationWire.swift Live/PartnerLanguage.swift Live/ImportedAudio.swift Live/TranscriptionWire.swift Live/VoiceSynthesisLanguage.swift Live/VoiceReferenceClip.swift LiveTests/test_wire.swift -o "$RUNNER_TEMP/live-wire-tests"
           "$RUNNER_TEMP/live-wire-tests"
+      - name: Test Russian proofreading and translation routing
+        run: |
+          swiftc Live/VoiceSynthesisLanguage.swift Live/VoiceTextProcessingPolicy.swift LiveTests/test_proofreading.swift -o "$RUNNER_TEMP/live-proofreading-tests"
+          "$RUNNER_TEMP/live-proofreading-tests"
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate completely separate Live project
@@ -53,6 +57,21 @@ jobs:
           assert 'ChatGPT' in voice_lab and 'needsTranslation' in voice_lab
           assert 'translatedSource == phrase && translatedLanguage == language' in voice_lab
           assert 'engine.speak(spoken, language: language)' in voice_lab
+          policy = Path('Live/VoiceTextProcessingPolicy.swift').read_text()
+          assert 'proofreading: Bool = false' in api
+          assert 'VoiceTextProcessingPolicy.russianProofreadingInstructions' in api
+          assert 'case proofreadRussian' in policy
+          assert 'needsProofreading' in voice_lab and 'needsTextProcessing' in voice_lab
+          assert 'translatedSource == phrase && translatedLanguage == language' in voice_lab
+          assert 'translatedModel == chatModel' in voice_lab
+          assert 'activeRequestID == requestID' in voice_lab
+          assert 'Подключить ChatGPT для корректуры' in voice_lab
+          assert 'Исходный текст' in voice_lab
+          assert 'Исправленный текст' in voice_lab
+          assert 'Озвучить оригинал без исправлений' in voice_lab
+          assert 'Toggle("Исправлять русский перед озвучиванием"' in app
+          assert 'live.russianProofreadingEnabled' in voice_lab
+          print('Russian proofreading safeguards and manual review validated')
           print('Independent OAuth plan access and target-language translation validated')
           assert 'HomeFeatureTile(title: "Текст → голос"' in app
           assert 'HomeFeatureTile(title: "Голос → текст"' in app
@@ -137,8 +156,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.12'
-          assert info['CFBundleVersion'] == '22'
+          assert info['CFBundleShortVersionString'] == '1.4.13'
+          assert info['CFBundleVersion'] == '23'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -146,11 +165,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.12-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.12-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.13-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.13-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.12-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.12-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.13-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.13-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
