@@ -47,10 +47,6 @@ jobs:
         run: |
           swiftc Live/WebRTCBufferedPCM.swift Live/WebRTCDelayedAudioGate.swift LiveTests/test_webrtc_delayed_audio_gate.swift -o "$RUNNER_TEMP/webrtc-audio-gate-tests"
           "$RUNNER_TEMP/webrtc-audio-gate-tests"
-      - name: Test WebRTC audio drain completion and next phrase
-        run: |
-          swiftc Live/WebRTCAudioDrainMonitor.swift LiveTests/test_webrtc_audio_drain_monitor.swift -o "$RUNNER_TEMP/webrtc-audio-drain-tests"
-          "$RUNNER_TEMP/webrtc-audio-drain-tests"
       - name: Test local WebRTC tail audio with original format
         run: |
           swiftc Live/WebRTCBufferedPCM.swift Live/WebRTCDelayedAudioGate.swift LiveTests/test_webrtc_local_tail.swift -o "$RUNNER_TEMP/webrtc-local-tail-tests"
@@ -112,24 +108,22 @@ jobs:
           assert "audioGate.process(" in custom
           assert "playbackAfterRelease" in protocol
           assert "BufferedWebRTCAudioDevice(gate:" in protocol
-          assert "pendingBytes: self.delayedGate.pendingBytes" in protocol
-          print("WebRTC full-audio delayed playout follows Push-to-Talk release")
-          drain = Path("Live/WebRTCAudioDrainMonitor.swift").read_text()
-          assert "case stalled(remainingBytes: Int)" in drain
-          assert "maxDuration: TimeInterval = 80" in drain
-          assert "phase = .finished" in protocol
-          assert "WebRTCAudioDrainMonitor(" in protocol
-          assert "case .stalled, .timedOut, .waiting:" in protocol
-          assert "playback_completion=" in protocol
-          assert "НОВАЯ ФРАЗА" in view and "engine.connect(target: target)" in view
-          assert "if engine.phase == .finished || engine.phase == .failed || engine.phase == .idle" in view
-          assert "renderedBytes: self.delayedGate.renderedBytes" in protocol
-          assert "renderedPCMBytes += emitted" in buffered
-          assert "renderedBytes > previousRendered" in drain
-          assert "consumeRemainingPCM()" in protocol
-          assert "private func playRemainingAudio" in protocol
-          assert "audioPlayerDidFinishPlaying" in protocol
-          assert "local_tail_completed" in protocol
+          assert 'Task.sleep(for: .milliseconds(650))' in protocol
+          assert 'WebRTCAudioDrainMonitor(' not in protocol
+          assert 'maxDuration: TimeInterval = 80' not in protocol
+          assert 'rendered_pcm_bytes=' in protocol
+          assert 'phase = .finished' in protocol
+          assert 'playback_completion=' in protocol
+          assert 'НОВАЯ ФРАЗА' in view and 'engine.connect(target: target)' in view
+          assert 'if engine.phase == .finished || engine.phase == .failed || engine.phase == .idle' in view
+          assert 'consumeRemainingPCM()' in protocol
+          assert 'private func playRemainingAudio' in protocol
+          assert 'player.currentTime' in protocol and '!player.isPlaying' in protocol
+          assert 'local_tail_completed_poll' in protocol
+          assert 'audioPlayerDidFinishPlaying' in protocol
+          assert 'Label("Остановить воспроизведение"' in app
+          assert 'rtc.phase == .finishing' in app
+          assert 'renderedPCMBytes += emitted' in buffered
           assert "setOutputPCMFormat" in custom
           assert "func consumeRemainingPCM()" in buffered
           assert 'WebRTCBufferedPCM' in Path("Live/WebRTCBufferedPCM.swift").read_text()
@@ -269,8 +263,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.23'
-          assert info['CFBundleVersion'] == '33'
+          assert info['CFBundleShortVersionString'] == '1.4.24'
+          assert info['CFBundleVersion'] == '34'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -278,11 +272,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.23-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.23-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.24-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.24-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.23-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.23-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.24-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.24-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
