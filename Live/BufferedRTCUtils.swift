@@ -45,7 +45,7 @@ extension DispatchTimeInterval: CustomDebugStringConvertible {
   }
 }
 
-func measureTime<Result>(label: String = #function, block: () -> Result) -> Result {
+func rtcMeasureTime<Result>(label: String = #function, block: () -> Result) -> Result {
   let start = DispatchTime.now()
   let result = block()
   let end = DispatchTime.now()
