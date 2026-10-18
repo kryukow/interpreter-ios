@@ -1,9 +1,12 @@
 import AVFoundation
 import Foundation
 
-/// Plays each translated PCM16 delta as soon as the microphone has stopped.
-/// The original PCM stream is kept by TranslationConnection for free replay.
+/// Plays the PCM16 translation stream after microphone release.
+/// The original server audio is retained separately for free replay.
+/// The byte audit checks transport/playback fidelity, not translation accuracy.
 @MainActor final class LiveStreamPlayer {
+    private enum PlaybackError: Error { case invalidBuffer }
+
     private let format = AVAudioFormat(standardFormatWithSampleRate: 24_000, channels: 1)!
     private var engine: AVAudioEngine?
     private var node: AVAudioPlayerNode?
@@ -11,31 +14,49 @@ import Foundation
     private var released = false
     private var confirmed = false
     private var closed = false
+    private var failed = false
     private var outstanding = 0
+    private var integrity = StreamAudioIntegrity()
     private var token = UUID()
     private(set) var isPlaying = false
+
     var onStart: (() -> Void)?
     var onEnd: (() -> Void)?
+    var onError: ((String) -> Void)?
 
     func append(_ pcm: Data) {
-        guard !closed, !pcm.isEmpty, pcm.count % 2 == 0 else { return }
+        guard !closed, !failed else { return }
+        guard !pcm.isEmpty, pcm.count.isMultiple(of: 2) else {
+            fail("Некорректный звуковой фрагмент. Можно прослушать полный ответ или озвучить текст.")
+            return
+        }
+        integrity.receive(pcm)
         pending.append(pcm)
         flush()
     }
 
     func confirmTranscript(_ text: String) {
+        guard !failed else { return }
         confirmed = !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         flush()
     }
 
     func microphoneReleased() {
+        guard !failed else { return }
         released = true
         flush()
     }
 
     func complete() {
+        guard !failed else { return }
         closed = true
         flush()
+        // Every PCM byte must be scheduled in its original order before we
+        // consider the stream complete; never silently discard a chunk.
+        if confirmed && integrity.receivedBytes > 0 && !integrity.matches {
+            fail("Потоковое аудио передано в плеер не полностью. Проверь полный ответ или озвучь текст.")
+            return
+        }
         checkCompletion()
     }
 
@@ -50,13 +71,13 @@ import Foundation
         released = false
         confirmed = false
         closed = false
+        failed = false
+        integrity = StreamAudioIntegrity()
         isPlaying = false
     }
 
     private func flush() {
-        // Never feed the translated speaker output back into the microphone.
-        // Also avoid auto-playing audio when the server never returned translation text.
-        guard released, confirmed, !pending.isEmpty else { return }
+        guard !failed, released, confirmed, !pending.isEmpty else { return }
         do {
             if node == nil {
                 let session = AVAudioSession.sharedInstance()
@@ -69,16 +90,15 @@ import Foundation
                 try newEngine.start()
                 engine = newEngine
                 node = newNode
-                newNode.play()
-                isPlaying = true
-                onStart?()
             }
-            guard let node else { return }
+            guard let node else { throw PlaybackError.invalidBuffer }
             let current = token
             for pcm in pending {
                 let count = pcm.count / 2
                 guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(count)),
-                      let channel = buffer.floatChannelData?[0] else { continue }
+                      let channel = buffer.floatChannelData?[0] else {
+                    throw PlaybackError.invalidBuffer
+                }
                 buffer.frameLength = AVAudioFrameCount(count)
                 pcm.withUnsafeBytes { raw in
                     for i in 0..<count {
@@ -94,16 +114,28 @@ import Foundation
                         self.checkCompletion()
                     }
                 }
+                integrity.schedule(pcm)
             }
             pending.removeAll()
+            if !isPlaying {
+                node.play()
+                isPlaying = true
+                onStart?()
+            }
         } catch {
-            stop()
-            onEnd?()
+            fail("Не удалось воспроизвести поток без потерь. Проверь полный ответ или озвучь текст.")
         }
     }
 
+    private func fail(_ message: String) {
+        guard !failed else { return }
+        stop()
+        failed = true
+        onError?(message)
+    }
+
     private func checkCompletion() {
-        guard closed, outstanding == 0 else { return }
+        guard !failed, closed, outstanding == 0 else { return }
         if isPlaying {
             node?.stop()
             engine?.stop()
