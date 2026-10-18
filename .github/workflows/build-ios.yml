@@ -42,6 +42,18 @@ jobs:
           assert 'UIDocumentPickerViewController(' in transcription
           assert 'asCopy: true' in transcription
           voice_lab = Path('Live/LocalVoiceLab.swift').read_text()
+          login = Path('Live/ChatGPTLogin.swift').read_text()
+          session = Path('Live/ChatGPTSessionStore.swift').read_text()
+          api = Path('Live/ChatGPTPlanAPI.swift').read_text()
+          assert 'chatgpt.tokens.use.direct' in login and 'resource.invoke' in login
+          assert 'Interpreter Live iPhone' in login
+          assert 'kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly' in session
+          assert 'kSecAttrAccessGroup' not in session
+          assert 'targetLanguage: String' in api and 'https://api.openai.com/v1/responses' in api
+          assert 'ChatGPT' in voice_lab and 'needsTranslation' in voice_lab
+          assert 'translatedSource == phrase && translatedLanguage == language' in voice_lab
+          assert 'engine.speak(spoken, language: language)' in voice_lab
+          print('Independent OAuth plan access and target-language translation validated')
           assert 'HomeFeatureTile(title: "Текст → голос"' in app
           assert 'HomeFeatureTile(title: "Голос → текст"' in app
           assert 'Section("Экспериментальный режим")' not in voice_lab
@@ -125,8 +137,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.11'
-          assert info['CFBundleVersion'] == '21'
+          assert info['CFBundleShortVersionString'] == '1.4.12'
+          assert info['CFBundleVersion'] == '22'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -134,11 +146,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.11-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.11-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.12-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.12-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.11-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.11-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.12-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.12-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
