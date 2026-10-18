@@ -63,7 +63,16 @@ jobs:
           assert 'showWebRTCExperiment' in app and 'WebRTCExperimentView()' in app
           assert 'WebRTC' in Path("Live/project.yml").read_text()
           assert 'TranslationConnection()' in Path("Live/LiveSession.swift").read_text()
+          routing = Path("Live/WebRTCTranslationExperiment.swift").read_text()
+          assert "RTCAudioSession.sharedInstance()" in routing
+          assert "rtc.lockForConfiguration()" in routing
+          assert "rtc.overrideOutputAudioPort(.speaker)" in routing
+          assert "guard !external" in routing and ".defaultToSpeaker" in routing
+          assert "AVAudioSession.routeChangeNotification" in routing
+          screen = Path("Live/WebRTCExperimentView.swift").read_text()
+          assert 'engine.audioOutput' in screen
           print("WebRTC experiment isolated from production WebSocket mode")
+          print("WebRTC speaker fallback and external-headphone safeguards validated")
           PY
       - name: Install XcodeGen
         run: brew install xcodegen
@@ -198,8 +207,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.18'
-          assert info['CFBundleVersion'] == '28'
+          assert info['CFBundleShortVersionString'] == '1.4.19'
+          assert info['CFBundleVersion'] == '29'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -207,11 +216,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.18-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.18-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.19-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.19-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.18-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.18-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.19-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.19-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
