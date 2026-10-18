@@ -42,8 +42,8 @@ jobs:
           assert 'UIDocumentPickerViewController(' in transcription
           assert 'asCopy: true' in transcription
           voice_lab = Path('Live/LocalVoiceLab.swift').read_text()
-          login = Path('Live/ChatGPTLogin.swift').read_text()
-          session = Path('Live/ChatGPTSessionStore.swift').read_text()
+          login = Path('Live/PlanOAuthFlow.swift').read_text()
+          session = Path('Live/PlanCredentialVault.swift').read_text()
           api = Path('Live/ChatGPTPlanAPI.swift').read_text()
           assert 'chatgpt.tokens.use.direct' in login and 'resource.invoke' in login
           assert 'Interpreter Live iPhone' in login
