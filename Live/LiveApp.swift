@@ -71,6 +71,13 @@ struct LiveView: View {
                     if model.translatedWave != nil {
                         Button(model.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Проверить звук ответа · бесплатно" : "Прослушать снова · бесплатно") { model.replay() }.disabled(model.busy)
                     }
+                    if model.translationComplete {
+                        Button("Озвучить текст перевода · голос iPhone · бесплатно") {
+                            model.speakText()
+                        }.disabled(model.busy)
+                        Text("Произносит именно текст на экране, без нового API-запроса. Голос отличается от голоса OpenAI.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     if let wave = model.recordedWave {
                         Button("Послушать свою запись · бесплатно") { model.review() }.disabled(model.busy)
                         Button("Сохранить WAV") {
