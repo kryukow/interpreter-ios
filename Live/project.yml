@@ -6,11 +6,14 @@ packages:
   ChatterboxCoreML:
     url: https://github.com/iliasaz/chatterbox-coreml.git
     revision: b8288834e783f3a6210757fbaf62f9014220bff9
+  WebRTC:
+    url: https://github.com/stasel/WebRTC.git
+    from: 153.0.0
 settings:
   base:
     SWIFT_VERSION: '5.0'
-    MARKETING_VERSION: '1.4.17'
-    CURRENT_PROJECT_VERSION: '27'
+    MARKETING_VERSION: '1.4.18'
+    CURRENT_PROJECT_VERSION: '28'
     TARGETED_DEVICE_FAMILY: '1'
 targets:
   InterpreterLive:
@@ -22,6 +25,7 @@ targets:
       - path: ../App/Assets.xcassets
     dependencies:
       - package: ChatterboxCoreML
+      - package: WebRTC
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: org.interpreter.live
