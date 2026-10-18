@@ -294,3 +294,50 @@ To report a new failure: make one Russian-to-German push-to-talk translation,
 leave the conversation untouched, tap **Скопировать журнал для OpenAI Support**,
 and paste the report into the current support thread. An original output WAV
 can be exported separately if needed.
+
+## 1.4.18 (28) — isolated native WebRTC experiment
+
+A separate **WebRTC · проверить звучание без WebSocket** control on the
+main screen opens a native WebRTC test page. The existing Russian ↔ partner
+Push-to-Talk buttons, WebSocket transport, PCM logging, post-processing, local
+Chatterbox voice, and Russian proofreading are unchanged.
+
+Technical details:
+- Same model: `gpt-realtime-translate`.
+- Native RTCPeerConnection from pinned `stasel/WebRTC` package (153.0.0).
+- The standard OpenAI API key stays in the existing iOS Keychain. A native
+  `URLSession` request to `/v1/realtime/translations/client_secrets`
+  exchanges it for a short-lived secret; only that secret goes to
+  `/v1/realtime/translations/calls` for SDP exchange.
+- Input is the WebRTC microphone track, initially disabled. When connected,
+  press and hold the dedicated experiment button to enable audio. Releasing
+  disables the track and sends `session.close` via the `oai-events` data channel.
+- Translated audio arrives on WebRTC's remote audio track and is played
+  directly by its audio engine. Text arrives as `session.output_transcript.delta`.
+  A brief post-close buffer is allowed for the remote audio playout.
+- Echo cancellation is requested using a voice-chat audio session. Use
+  AirPods/headphones for initial tests because translation can start during
+  recording; iPhone speaker may otherwise cause acoustic feedback.
+
+**Experiment limitations:** This mode does not save server PCM deltas or the
+original OpenAI WAV, cannot use our PCM silence compactor, and does not provide
+per-sample silence diagnostics. The A/B comparison is perceptual until we
+add native WebRTC decoded-audio capture. No API requests are sent until
+the user explicitly enters and connects in this screen. Billing for API
+translation still applies. Microphone starts transmitting only while the
+experiment control is held. Dismissing the screen or backgrounding disconnects
+the peer. Normal WebSocket Push-to-Talk stays fully available.
+
+**Test plan on iPhone:**
+1. Use the main WebSocket mode for Russian → German and note pause quality.
+2. Open WebRTC screen, connect using same target language; use headphones.
+3. Wait for "WebRTC подключён"; hold to speak and release to finish.
+4. Listen for pauses, timbre, overall latency, and voice volume; compare with
+   WebSocket using similar input phrases.
+5. Repeat with the opposite language, explicitly disconnect between sessions.
+6. Verify that closing the screen and backgrounding releases the microphone.
+7. Confirm the local Chatterbox features and keychain continue to work.
+
+Do not promote this draft to production until it compiles for an actual iPhone
+and has been tested on-device for echo, capture activation, playout and session
+termination. Compilation is not proof that WebRTC succeeds with the live API.
