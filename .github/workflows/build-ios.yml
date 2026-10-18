@@ -87,7 +87,7 @@ jobs:
           assert "audioGate.process(" in custom
           assert "playbackAfterRelease" in protocol
           assert "BufferedWebRTCAudioDevice(gate:" in protocol
-          assert "self.delayedGate.pendingBytes > 0" in protocol
+          assert "pendingBytes: self.delayedGate.pendingBytes" in protocol
           print("WebRTC full-audio delayed playout follows Push-to-Talk release")
           drain = Path("Live/WebRTCAudioDrainMonitor.swift").read_text()
           assert "case stalled(remainingBytes: Int)" in drain
