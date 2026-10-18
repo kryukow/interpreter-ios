@@ -217,6 +217,13 @@ import WebRTC
             refreshOutputLabel()
             return
         }
+        if ports.contains(.builtInSpeaker) &&
+            session.category == .playAndRecord &&
+            session.categoryOptions.contains(.defaultToSpeaker) {
+            speakerRoutingIssue = nil
+            refreshOutputLabel()
+            return
+        }
         let rtc = RTCAudioSession.sharedInstance()
         rtc.lockForConfiguration()
         defer { rtc.unlockForConfiguration() }
