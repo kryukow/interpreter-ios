@@ -20,6 +20,7 @@ struct LiveView: View {
     @State private var importing = false
     @State private var showTranscription = false
     @State private var showVoiceLab = false
+    @State private var showWebRTCExperiment = false
     @State private var document: RecordingDocument?
     @State private var exportError = false
     @State private var importError: String?
@@ -135,6 +136,23 @@ struct LiveView: View {
                     talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
                 }
                 .frame(height: 136)
+
+                Button {
+                    model.stopAll()
+                    showWebRTCExperiment = true
+                } label: {
+                    HStack(spacing: 9) {
+                        Image(systemName: "network")
+                        Text("WebRTC · проверить звучание без WebSocket")
+                        Spacer()
+                        Image(systemName: "chevron.right").font(.caption)
+                    }
+                    .font(.caption.weight(.semibold))
+                    .padding(12)
+                    .background(Color(white: 0.105), in: RoundedRectangle(cornerRadius: 14))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.busy)
 
                 HStack(spacing: 10) {
                     HomeFeatureTile(title: "Голос → текст",
