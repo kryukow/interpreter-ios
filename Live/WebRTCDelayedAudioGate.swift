@@ -14,14 +14,47 @@ final class WebRTCDelayedAudioGate {
     private var used = 0
     private var capturedBytes = 0
     private var droppedBytes = 0
+    private var renderedPCMBytes = 0
     private var zeroRunBytes = 0
     private var hasStartedAudio = false
     private let maxZeroBytes: Int
+    private var outputSampleRate = 0
+    private var outputChannels = 0
 
     init(capacityBytes: Int = 48_000 * 2 * 2 * 65,
          maxZeroBytes: Int = 48_000 * 2 * 2 * 1) {
         bytes = [UInt8](repeating: 0, count: max(capacityBytes, 1024))
         self.maxZeroBytes = maxZeroBytes
+    }
+
+    /// Called by the custom audio device when its real render format is known.
+    func setOutputPCMFormat(sampleRate: Int, channels: Int) {
+        lock.lock()
+        outputSampleRate = sampleRate
+        outputChannels = channels
+        lock.unlock()
+    }
+
+    /// Call after stopping the WebRTC peer. Atomically snapshots the unread
+    /// samples in FIFO order, so the local player can finish playback without
+    /// relying on WebRTC's render callback continuing after session.closed.
+    func consumeRemainingPCM() -> WebRTCBufferedPCM? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard used > 0 else { return nil }
+        var data = Data(capacity: used)
+        let first = min(used, bytes.count - readIndex)
+        data.append(contentsOf: bytes[readIndex..<(readIndex + first)])
+        if used > first {
+            data.append(contentsOf: bytes[0..<(used - first)])
+        }
+        let sampleRate = outputSampleRate
+        let channels = outputChannels
+        used = 0
+        readIndex = 0
+        writeIndex = 0
+        mode = .direct
+        return WebRTCBufferedPCM(bytes: data, sampleRate: sampleRate, channels: channels)
     }
 
     func startCapture() {
@@ -31,6 +64,7 @@ final class WebRTCDelayedAudioGate {
         used = 0
         capturedBytes = 0
         droppedBytes = 0
+        renderedPCMBytes = 0
         zeroRunBytes = 0
         hasStartedAudio = false
         mode = .capture
@@ -56,6 +90,15 @@ final class WebRTCDelayedAudioGate {
         lock.lock()
         defer { lock.unlock() }
         return used
+    }
+
+    /// Counts bytes emitted to the audio render output. Unlike pendingBytes,
+    /// this increases even when new remote audio arrives at the same speed
+    /// as playback, keeping the FIFO length unchanged.
+    var renderedBytes: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return renderedPCMBytes
     }
 
     var hasOverflowed: Bool {
@@ -112,8 +155,10 @@ final class WebRTCDelayedAudioGate {
             return false
         }
         var audible = false
+        var emitted = 0
         for i in 0..<byteCount {
             if used > 0 {
+                emitted += 1
                 input[i] = bytes[readIndex]
                 if input[i] != 0 { audible = true }
                 readIndex += 1
@@ -123,6 +168,7 @@ final class WebRTCDelayedAudioGate {
                 input[i] = 0
             }
         }
+        renderedPCMBytes += emitted
         return audible
     }
 }
