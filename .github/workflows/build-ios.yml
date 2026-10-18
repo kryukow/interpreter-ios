@@ -80,7 +80,7 @@ jobs:
           buffered = Path("Live/WebRTCDelayedAudioGate.swift").read_text()
           custom = Path("Live/BufferedWebRTCAudioDevice.swift").read_text()
           assert "mode = .capture" in buffered and "mode = .drain" in buffered
-          assert "speechGate.process(" in custom
+          assert "audioGate.process(" in custom
           assert "playbackAfterRelease" in protocol
           assert "BufferedWebRTCAudioDevice(gate:" in protocol
           assert "self.delayedGate.pendingBytes > 0" in protocol
