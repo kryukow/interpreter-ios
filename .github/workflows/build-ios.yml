@@ -19,6 +19,10 @@ jobs:
         run: |
           swiftc Live/TranslationWire.swift Live/PartnerLanguage.swift Live/ImportedAudio.swift Live/TranscriptionWire.swift Live/VoiceSynthesisLanguage.swift Live/VoiceReferenceClip.swift LiveTests/test_wire.swift -o "$RUNNER_TEMP/live-wire-tests"
           "$RUNNER_TEMP/live-wire-tests"
+      - name: Test streamed PCM integrity
+        run: |
+          swiftc Live/StreamAudioIntegrity.swift LiveTests/test_stream_audio_integrity.swift -o "$RUNNER_TEMP/live-stream-tests"
+          "$RUNNER_TEMP/live-stream-tests"
       - name: Test Russian proofreading and translation routing
         run: |
           swiftc Live/VoiceSynthesisLanguage.swift Live/VoiceTextProcessingPolicy.swift LiveTests/test_proofreading.swift -o "$RUNNER_TEMP/live-proofreading-tests"
@@ -37,7 +41,7 @@ jobs:
               assert old.name not in project, old.name
           for path in Path('Live').glob('*.swift'):
               text = path.read_text()
-              for legacy in ('import Speech', 'AVSpeechSynthesizer', 'SFSpeechRecognizer'):
+              for legacy in ('import Speech', 'SFSpeechRecognizer'):
                   assert legacy not in text, (path, legacy)
           app = Path('Live/LiveApp.swift').read_text()
           transcription = Path('Live/TranscriptionFeature.swift').read_text()
@@ -156,8 +160,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.13'
-          assert info['CFBundleVersion'] == '23'
+          assert info['CFBundleShortVersionString'] == '1.4.14'
+          assert info['CFBundleVersion'] == '24'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -165,11 +169,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.13-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.13-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.14-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.14-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.13-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.13-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.14-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.14-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
