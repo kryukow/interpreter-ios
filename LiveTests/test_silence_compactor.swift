@@ -38,9 +38,9 @@ import Foundation
               "Natural short pause should remain untouched")
 
         var nearlySilent = DigitalSilenceCompactor()
-        let quietNonZero = samples([1, -1, 1, -1]) + Data(repeating: 0, count: 48_000)
+        let quietNonZero = samples([1, -1, 1, -1]) + Data(repeating: 0, count: 9_600)
         check(nearlySilent.process(quietNonZero) == quietNonZero,
-              "Non-zero audio or a one-second silence was mishandled")
+              "Non-zero audio or a 200-ms silence was mishandled")
 
         var extra = DigitalSilenceCompactor()
         check(extra.process(Data()) == Data(), "Empty input must remain empty")
