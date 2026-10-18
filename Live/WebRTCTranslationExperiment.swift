@@ -321,14 +321,17 @@ extension WebRTCTranslationExperiment: RTCPeerConnectionDelegate {
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection,
                                     didChange stateChanged: RTCSignalingState) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
-        Task { @MainActor [weak self] in self?.remoteAudioTracks += stream.audioTracks.count }
+        Task { @MainActor [weak self] in
+            guard let self, self.peer === peerConnection else { return }
+            self.remoteAudioTracks += stream.audioTracks.count
+        }
     }
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
     nonisolated func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
     nonisolated func peerConnection(_ peerConnection: RTCPeerConnection,
                                     didChange newState: RTCIceConnectionState) {
         Task { @MainActor [weak self] in
-            guard let self else { return }
+            guard let self, self.peer === peerConnection else { return }
             switch newState {
             case .connected, .completed:
                 self.didConnect = true
