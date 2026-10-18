@@ -349,17 +349,17 @@ import WebRTC
                         ? "Очередь звука переполнилась · попробуй новую фразу"
                         : "Перевод завершён · нажми «Новая фраза»"
                 case .stalled(let remaining):
-                    completion = "stalled (\\(remaining) bytes remaining)"
+                    completion = "stalled (\(remaining) bytes remaining)"
                     self.status = "Воспроизведение остановилось · хвост звука мог пропасть. Нажми «Новая фраза»"
                 case .timedOut(let remaining):
-                    completion = "timeout (\\(remaining) bytes remaining)"
+                    completion = "timeout (\(remaining) bytes remaining)"
                     self.status = "Время ожидания звука истекло · нажми «Новая фраза»"
                 case .waiting:
                     // Only possible if an unexpected loop exit occurs.
                     completion = "interrupted"
                     self.status = "Воспроизведение прервано · нажми «Новая фраза»"
                 }
-                self.diagnostic += "\\nplayback_completion=\\(completion)"
+                self.diagnostic += "\nplayback_completion=\(completion)"
                 self.phase = .finished
                 self.events?.delegate = nil
                 self.events?.close()
