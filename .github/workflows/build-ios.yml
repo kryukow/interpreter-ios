@@ -43,6 +43,10 @@ jobs:
         run: |
           swiftc Live/VoiceSynthesisLanguage.swift Live/VoiceTextProcessingPolicy.swift LiveTests/test_proofreading.swift -o "$RUNNER_TEMP/live-proofreading-tests"
           "$RUNNER_TEMP/live-proofreading-tests"
+      - name: Test WebRTC translation handshake and secret parsing
+        run: |
+          swiftc Live/WebRTCTranslationProtocol.swift LiveTests/test_webrtc_translation_protocol.swift -o "$RUNNER_TEMP/webrtc-translation-tests"
+          "$RUNNER_TEMP/webrtc-translation-tests"
       - name: Confirm WebRTC experiment isolation
         run: |
           python3 - <<'PY'
