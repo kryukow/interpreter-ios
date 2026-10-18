@@ -1,6 +1,8 @@
 import SwiftUI
 import AVFoundation
 import UniformTypeIdentifiers
+import NaturalLanguage
+import SafariServices
 import ChatterboxCoreML
 
 /// Isolated, opt-in on-device voice-cloning experiment.
@@ -424,6 +426,37 @@ struct LocalVoiceLabView: View {
     @FocusState private var textEditorFocused: Bool
     @State private var importing = false
     @State private var confirmingVoiceDeletion = false
+    @StateObject private var chatLogin = Login()
+    @State private var authBrowser: VoiceAuthBrowserLink?
+    @State private var chatConnected = false
+    @State private var chatModel = ""
+    @State private var chatMessage = ""
+    @State private var chatBusy = false
+    @State private var translating = false
+    @State private var translationTask: Task<Void, Never>?
+    @State private var translatedText = ""
+    @State private var translatedSource = ""
+    @State private var translatedLanguage = ""
+    @State private var translationError = ""
+
+    private var needsTranslation: Bool {
+        let text = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return false }
+        let recognizer = NLLanguageRecognizer()
+        recognizer.processString(text)
+        guard let detected = recognizer.dominantLanguage?.rawValue else { return language != "ru" }
+        let detectedBase = detected.split(separator: "-").first.map(String.init) ?? detected
+        return detectedBase != language && !(language == "no" && detectedBase == "nb")
+    }
+
+    private var translationReady: Bool {
+        !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
+        translatedSource == phrase && translatedLanguage == language && !translating
+    }
+
+    private var textForSpeech: String {
+        needsTranslation ? translatedText : phrase
+    }
 
     var body: some View {
         NavigationStack {
@@ -512,20 +545,68 @@ struct LocalVoiceLabView: View {
                         }
                     }
                     .pickerStyle(.menu)
-                    .onChange(of: language) { oldValue, newValue in
-                        // Preserve custom text; replace only the old demonstration phrase.
-                        let previousSample = VoiceSynthesisLanguage.sample(for: oldValue)
-                        if phrase.isEmpty || phrase == previousSample {
-                            phrase = VoiceSynthesisLanguage.sample(for: newValue) ?? phrase
-                        }
+                    .onChange(of: language) { _, _ in
+                        // Always translate from the user's original, never from a prior translation.
+                        resetTranslation()
+                        requestTranslation()
                     }
                     TextEditor(text: $phrase)
                         .focused($textEditorFocused)
                         .frame(minHeight: 86)
+                        .onChange(of: phrase) { _, _ in resetTranslation() }
+                        .onChange(of: textEditorFocused) { _, focused in
+                            if !focused { requestTranslation() }
+                        }
+                    if needsTranslation {
+                        if !chatConnected {
+                            Button("Подключить ChatGPT для перевода") { connectChatGPT() }
+                                .disabled(chatBusy)
+                            Text(chatBusy ? "Подключаю ChatGPT…" :
+                                 "Перевод использует разрешённые лимиты твоей подписки ChatGPT. Отдельный API-ключ не нужен.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if !chatMessage.isEmpty {
+                                Text(chatMessage).font(.footnote).foregroundStyle(.secondary)
+                            }
+                        } else {
+                            if translating {
+                                HStack {
+                                    ProgressView().tint(.white)
+                                    Text("Перевожу на выбранный язык…")
+                                        .font(.subheadline)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            if !translatedText.isEmpty {
+                                Text("Перевод · \(VoiceSynthesisLanguage.all.first(where: { $0.code == language })?.name ?? language)")
+                                    .font(.caption.weight(.medium))
+                                    .foregroundStyle(.secondary)
+                                TextEditor(text: $translatedText)
+                                    .frame(minHeight: 70)
+                                    .accessibilityLabel("Переведённый текст. Можно исправить перед озвучиванием.")
+                            }
+                            if !translating && !translationReady {
+                                Button("Перевести через ChatGPT") {
+                                    textEditorFocused = false
+                                    requestTranslation()
+                                }
+                            }
+                            if !translationError.isEmpty {
+                                Text(translationError).font(.footnote)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     Button("Озвучить моим голосом") {
                         textEditorFocused = false
-                        engine.speak(phrase, language: language)
-                    }.disabled(engine.busy || !engine.loaded || !engine.hasVoice)
+                        let spoken = textForSpeech
+                        guard !needsTranslation || translationReady else { return }
+                        engine.speak(spoken, language: language)
+                    }
+                    .disabled(engine.busy || !engine.loaded || !engine.hasVoice ||
+                              translating || (needsTranslation && !translationReady) ||
+                              textForSpeech.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                              textForSpeech.count > 500)
                     if engine.outputURL != nil {
                         Button("Повторить аудио") {
                             engine.replayLastAudio()
@@ -577,12 +658,119 @@ struct LocalVoiceLabView: View {
                                 isPresented: $confirmingVoiceDeletion) {
                 Button("Удалить голос", role: .destructive) { engine.deleteVoice() }
             }
+            .onChange(of: chatLogin.browserURL) { _, url in
+                authBrowser = url.map { VoiceAuthBrowserLink(url: $0) }
+            }
+            .sheet(item: $authBrowser) { link in
+                VoiceAuthBrowser(url: link.url).ignoresSafeArea()
+            }
+            .task { await restoreChatGPT() }
             .onDisappear {
+                translationTask?.cancel()
                 textEditorFocused = false
                 engine.cleanup()
             }
         }
         .tint(.white)
+    }
+
+    private func resetTranslation() {
+        translationTask?.cancel()
+        translating = false
+        translatedText = ""
+        translatedSource = ""
+        translatedLanguage = ""
+        translationError = ""
+    }
+
+    private func restoreChatGPT() async {
+        guard !chatBusy else { return }
+        do {
+            guard let saved = try SessionStore.load() else { return }
+            let session = try await OpenAI.refresh(saved)
+            let available = try await OpenAI.models(session)
+            guard !available.isEmpty else { throw Failure.message("Нет доступных моделей ChatGPT.") }
+            let wanted = try SessionStore.defaults().string(forKey: "model") ?? ""
+            chatModel = available.first(where: { $0.id == wanted })?.id ?? available[0].id
+            try SessionStore.defaults().set(chatModel, forKey: "model")
+            chatConnected = true
+            chatMessage = "ChatGPT подключён."
+            requestTranslation()
+        } catch {
+            chatConnected = false
+            chatMessage = error.localizedDescription
+        }
+    }
+
+    private func connectChatGPT() {
+        guard !chatBusy else { return }
+        chatBusy = true
+        chatMessage = ""
+        Task { @MainActor in
+            defer { chatBusy = false }
+            do {
+                try await chatLogin.signIn()
+                await restoreChatGPTAfterSignIn()
+            } catch {
+                chatMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func restoreChatGPTAfterSignIn() async {
+        do {
+            guard let saved = try SessionStore.load() else { return }
+            let session = try await OpenAI.refresh(saved)
+            let available = try await OpenAI.models(session)
+            guard !available.isEmpty else { throw Failure.message("Нет доступных моделей ChatGPT.") }
+            chatModel = available[0].id
+            try SessionStore.defaults().set(chatModel, forKey: "model")
+            chatConnected = true
+            chatMessage = "ChatGPT подключён."
+            requestTranslation()
+        } catch {
+            chatConnected = false
+            chatMessage = error.localizedDescription
+        }
+    }
+
+    private func requestTranslation() {
+        translationTask?.cancel()
+        guard needsTranslation, chatConnected, !chatModel.isEmpty, !textEditorFocused else { return }
+        let original = phrase
+        let target = language
+        translationError = ""
+        translatedSource = ""
+        translatedLanguage = ""
+        translatedText = ""
+        translating = true
+        translationTask = Task { @MainActor in
+            do {
+                guard let saved = try SessionStore.load() else {
+                    throw Failure.message("Подключи ChatGPT для перевода.")
+                }
+                let session = try await OpenAI.refresh(saved)
+                let output = try await OpenAI.translateText(
+                    original, targetLanguage: target, model: chatModel, session: session
+                ) { partial in
+                    guard !Task.isCancelled, phrase == original, language == target else { return }
+                    translatedText = partial
+                }
+                try Task.checkCancellation()
+                guard phrase == original, language == target else { return }
+                translatedText = output.text
+                translatedSource = original
+                translatedLanguage = target
+                translating = false
+            } catch is CancellationError {
+                if phrase == original && language == target { translating = false }
+            } catch {
+                guard phrase == original, language == target else { return }
+                translatedText = ""
+                translationError = error.localizedDescription
+                translating = false
+            }
+        }
     }
 }
 
@@ -692,4 +880,17 @@ private struct LocalModelLoadingLine: View {
             }
         }
     }
+}
+
+private struct VoiceAuthBrowserLink: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct VoiceAuthBrowser: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        SFSafariViewController(url: url)
+    }
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
