@@ -341,3 +341,29 @@ the peer. Normal WebSocket Push-to-Talk stays fully available.
 Do not promote this draft to production until it compiles for an actual iPhone
 and has been tested on-device for echo, capture activation, playout and session
 termination. Compilation is not proof that WebRTC succeeds with the live API.
+
+## 1.4.19 (29) — WebRTC output routing on iPhone
+
+On-device testing confirmed WebRTC translation already runs quickly and without
+obvious multi-second pauses, but output without AirPods sometimes went through
+the quiet **built-in receiver** (the ear speaker), as in a phone call.
+
+The WebRTC experiment now:
+- monitors the active output route while its peer is connected;
+- uses `RTCAudioSession`'s configuration lock to request
+  `playAndRecord` + `voiceChat`, `defaultToSpeaker`, and Bluetooth support;
+- if the route is the **built-in receiver**, explicitly requests the built-in
+  loudspeaker with `overrideOutputAudioPort(.speaker)`;
+- never forces loudspeaker if headphones, Bluetooth or another external output
+  is currently active, because an override can also redirect microphone input;
+- reports the currently selected audio destination on its experiment screen,
+  with a retry control if still on the built-in receiver;
+- rechecks the route on connection, microphone activation and route changes.
+
+Speakerphone playback can create acoustic feedback if translated audio starts
+while the microphone is active, so headsets remain preferable for an
+uninterrupted bilingual call. Production WebSocket mode is unchanged.
+
+Validation: compile simulator and real iPhone, then confirm physical speaker
+vs built-in receiver and AirPods route preservation on-device. No new AI calls
+are required to configure routing; normal translation API usage is still billed.
