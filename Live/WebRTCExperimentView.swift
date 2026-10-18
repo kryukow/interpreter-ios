@@ -14,8 +14,19 @@ struct WebRTCExperimentView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text("WebRTC · эксперимент")
                     .font(.title2.bold())
-                Text("Та же модель gpt-realtime-translate, но iPhone получает перевод как живую аудиодорожку WebRTC. Основной WebSocket остаётся без изменений.")
+                Text("Та же модель gpt-realtime-translate, но голос передаётся через WebRTC. Основной WebSocket остаётся без изменений.")
                     .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                Toggle("Озвучивать только после отпускания", isOn: $engine.playbackAfterRelease)
+                    .font(.subheadline.weight(.medium))
+                    .disabled(engine.phase != .idle &&
+                              engine.phase != .finished &&
+                              engine.phase != .failed)
+                Text(engine.playbackAfterRelease
+                    ? "Как в привычном Push-to-Talk: пока держишь кнопку — тишина. После отпускания звучит накопленный голос OpenAI с начала, без потери первых слов."
+                    : "Живой режим: перевод OpenAI звучит параллельно твоей речи.")
+                    .font(.caption)
                     .foregroundStyle(.secondary)
 
                 VStack(alignment: .leading, spacing: 8) {
@@ -74,7 +85,9 @@ struct WebRTCExperimentView: View {
                         .buttonStyle(.bordered)
                 }
 
-                Text("После подключения удерживай кнопку для записи. Микрофон включается только при удержании; отпускание отправляет session.close.")
+                Text(engine.playbackAfterRelease
+                    ? "После подключения удерживай кнопку и говори. Во время записи ответ OpenAI складывается в локальный PCM-буфер. Отпускаешь — звук воспроизводится с начала."
+                    : "После подключения удерживай кнопку. Перевод звучит параллельно речи. Отпускание отправляет session.close.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -127,7 +140,7 @@ struct WebRTCExperimentView: View {
                         .textSelection(.enabled)
                         .foregroundStyle(.secondary)
                 }
-                Text("Тестовая функция: без сохранения входной и выходной аудиодорожки. Тарификация OpenAI API действует. Для сравнения сначала проверь такой же текст в основном WebSocket-режиме.")
+                Text("Тестовая функция: аудио сохраняется только во временном PCM-буфере памяти для последующего воспроизведения и не экспортируется. Запрос к OpenAI один. Тарификация API действует.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
