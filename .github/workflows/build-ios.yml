@@ -31,9 +31,13 @@ jobs:
         run: |
           swiftc Live/TranslationWire.swift Live/DigitalSilenceCompactor.swift Live/TranslationPlaybackAudio.swift LiveTests/test_playback_audio.swift -o "$RUNNER_TEMP/live-audio-playback-tests"
           "$RUNNER_TEMP/live-audio-playback-tests"
+      - name: Test non-invasive microphone level measurements
+        run: |
+          swiftc Live/InputAudioLevelMeter.swift LiveTests/test_input_audio_levels.swift -o "$RUNNER_TEMP/input-level-tests"
+          "$RUNNER_TEMP/input-level-tests"
       - name: Test timestamped audio delta diagnostic report
         run: |
-          swiftc Live/TranslationEventDiagnostics.swift LiveTests/test_translation_event_diagnostics.swift -o "$RUNNER_TEMP/live-event-diagnostics-tests"
+          swiftc Live/InputAudioLevelMeter.swift Live/TranslationEventDiagnostics.swift LiveTests/test_translation_event_diagnostics.swift -o "$RUNNER_TEMP/live-event-diagnostics-tests"
           "$RUNNER_TEMP/live-event-diagnostics-tests"
       - name: Test Russian proofreading and translation routing
         run: |
@@ -172,8 +176,8 @@ jobs:
           app = Path(os.environ['RUNNER_TEMP']) / 'LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app'
           info = plistlib.loads((app / 'Info.plist').read_bytes())
           assert info['CFBundleIdentifier'] == 'org.interpreter.live'
-          assert info['CFBundleShortVersionString'] == '1.4.16'
-          assert info['CFBundleVersion'] == '26'
+          assert info['CFBundleShortVersionString'] == '1.4.17'
+          assert info['CFBundleVersion'] == '27'
           assert 'NSSpeechRecognitionUsageDescription' not in info
           assert info['NSMicrophoneUsageDescription']
           print('Verified new app identity, microphone only')
@@ -181,11 +185,11 @@ jobs:
           mkdir -p "$RUNNER_TEMP/live-ipa/Payload"
           cp -R "$RUNNER_TEMP/LiveDevice/Build/Products/Release-iphoneos/InterpreterLive.app" "$RUNNER_TEMP/live-ipa/Payload/"
           cd "$RUNNER_TEMP/live-ipa"
-          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.16-Experimental-Unsigned.ipa" Payload
-          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.16-Experimental-Unsigned.ipa"
+          zip -qry "$RUNNER_TEMP/Interpreter-Live-1.4.17-Experimental-Unsigned.ipa" Payload
+          unzip -t "$RUNNER_TEMP/Interpreter-Live-1.4.17-Experimental-Unsigned.ipa"
       - uses: actions/upload-artifact@v4
         with:
-          name: Interpreter-Live-1.4.16-Experimental-Unsigned-iPhone
-          path: ${{ runner.temp }}/Interpreter-Live-1.4.16-Experimental-Unsigned.ipa
+          name: Interpreter-Live-1.4.17-Experimental-Unsigned-iPhone
+          path: ${{ runner.temp }}/Interpreter-Live-1.4.17-Experimental-Unsigned.ipa
           if-no-files-found: error
           retention-days: 7
