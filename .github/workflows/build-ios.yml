@@ -52,10 +52,11 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           protocol = Path("Live/WebRTCTranslationExperiment.swift").read_text()
+          contract = Path("Live/WebRTCTranslationProtocol.swift").read_text()
           view = Path("Live/WebRTCExperimentView.swift").read_text()
           app = Path("Live/LiveApp.swift").read_text()
-          assert "/v1/realtime/translations/client_secrets" in protocol
-          assert "/v1/realtime/translations/calls" in protocol
+          assert "/v1/realtime/translations/client_secrets" in contract
+          assert "/v1/realtime/translations/calls" in contract
           assert 'RTCDataBuffer(' in protocol and '"session.close"' in protocol
           assert 'microphoneTrack?.isEnabled = false' in protocol
           assert 'microphoneTrack?.isEnabled = true' in protocol
