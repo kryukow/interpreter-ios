@@ -15,23 +15,25 @@ struct WebRTCAudioDrainMonitor {
     private let maxDuration: TimeInterval
     private let stallInterval: TimeInterval
     private var lastProgress: TimeInterval
-    private var previousPending: Int
+    private var previousRendered: Int
 
-    init(pendingBytes: Int, at time: TimeInterval,
+    init(pendingBytes: Int, renderedBytes: Int, at time: TimeInterval,
          stallInterval: TimeInterval = 2.5,
          maxDuration: TimeInterval = 80) {
         start = time
         lastProgress = time
-        previousPending = max(0, pendingBytes)
+        previousRendered = max(0, renderedBytes)
         self.stallInterval = stallInterval
         self.maxDuration = maxDuration
     }
 
-    mutating func observe(pendingBytes: Int, at time: TimeInterval) -> Result {
+    mutating func observe(pendingBytes: Int, renderedBytes: Int, at time: TimeInterval) -> Result {
         let pending = max(0, pendingBytes)
         if pending == 0 { return .drained }
-        if pending != previousPending {
-            previousPending = pending
+        // FIFO size can stay constant while producer and consumer both run.
+        // The actual rendered-byte counter is the reliable liveness signal.
+        if renderedBytes > previousRendered {
+            previousRendered = renderedBytes
             lastProgress = time
         }
         if time - start >= maxDuration {
