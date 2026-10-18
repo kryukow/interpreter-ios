@@ -14,6 +14,7 @@ final class WebRTCDelayedAudioGate {
     private var used = 0
     private var capturedBytes = 0
     private var droppedBytes = 0
+    private var renderedPCMBytes = 0
     private var zeroRunBytes = 0
     private var hasStartedAudio = false
     private let maxZeroBytes: Int
@@ -63,6 +64,7 @@ final class WebRTCDelayedAudioGate {
         used = 0
         capturedBytes = 0
         droppedBytes = 0
+        renderedPCMBytes = 0
         zeroRunBytes = 0
         hasStartedAudio = false
         mode = .capture
@@ -88,6 +90,15 @@ final class WebRTCDelayedAudioGate {
         lock.lock()
         defer { lock.unlock() }
         return used
+    }
+
+    /// Counts bytes emitted to the audio render output. Unlike pendingBytes,
+    /// this increases even when new remote audio arrives at the same speed
+    /// as playback, keeping the FIFO length unchanged.
+    var renderedBytes: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return renderedPCMBytes
     }
 
     var hasOverflowed: Bool {
@@ -144,8 +155,10 @@ final class WebRTCDelayedAudioGate {
             return false
         }
         var audible = false
+        var emitted = 0
         for i in 0..<byteCount {
             if used > 0 {
+                emitted += 1
                 input[i] = bytes[readIndex]
                 if input[i] != 0 { audible = true }
                 readIndex += 1
@@ -155,6 +168,7 @@ final class WebRTCDelayedAudioGate {
                 input[i] = 0
             }
         }
+        renderedPCMBytes += emitted
         return audible
     }
 }
