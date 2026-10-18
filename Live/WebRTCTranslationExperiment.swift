@@ -16,6 +16,9 @@ import WebRTC
     @Published private(set) var transcript = ""
     @Published private(set) var diagnostic = ""
     @Published private(set) var targetLanguage = "de"
+    /// When enabled, the original WebRTC speech is buffered during PTT,
+    /// then played from the beginning after the user releases the microphone.
+    @Published var playbackAfterRelease = true
     @Published private(set) var audioOutput = "Не подключён"
     @Published private(set) var speakerRoutingIssue: String?
     var canRetrySpeaker: Bool {
@@ -36,6 +39,10 @@ import WebRTC
     private var peer: RTCPeerConnection?
     private var events: RTCDataChannel?
     private var microphoneTrack: RTCAudioTrack?
+    private let delayedGate = WebRTCDelayedAudioGate()
+    private var bufferedDevice: BufferedWebRTCAudioDevice?
+    private var bufferedFactory: RTCPeerConnectionFactory?
+    private var drainTask: Task<Void, Never>?
     private var routeObserver: NSObjectProtocol?
     private var connectingTask: Task<Void, Never>?
     private var generation = UUID()
@@ -85,7 +92,21 @@ import WebRTC
                     mandatoryConstraints: nil,
                     optionalConstraints: ["DtlsSrtpKeyAgreement": kRTCMediaConstraintsValueTrue]
                 )
-                guard let pc = Self.factory.peerConnection(
+                let factory: RTCPeerConnectionFactory
+                if self.playbackAfterRelease {
+                    let device = BufferedWebRTCAudioDevice(gate: self.delayedGate)
+                    self.bufferedDevice = device
+                    let created = RTCPeerConnectionFactory(
+                        encoderFactory: RTCDefaultVideoEncoderFactory(),
+                        decoderFactory: RTCDefaultVideoDecoderFactory(),
+                        audioDevice: device
+                    )
+                    self.bufferedFactory = created
+                    factory = created
+                } else {
+                    factory = Self.factory
+                }
+                guard let pc = factory.peerConnection(
                     with: config, constraints: constraints, delegate: self
                 ) else { throw ExperimentError.peerCreation }
                 self.peer = pc
@@ -123,10 +144,13 @@ import WebRTC
     func beginSpeaking() {
         guard phase == .ready else { return }
         configureAudioOutput()
+        if playbackAfterRelease { delayedGate.startCapture() }
         microphoneTrack?.isEnabled = true
         beganSpeakingAt = Date()
         phase = .speaking
-        status = "Говори · перевод может звучать сразу · отпусти кнопку для завершения"
+        status = playbackAfterRelease
+            ? "Говори · перевод накапливается без звука"
+            : "Говори · перевод может звучать сразу · отпусти кнопку для завершения"
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
@@ -134,8 +158,11 @@ import WebRTC
         guard phase == .speaking else { return }
         microphoneTrack?.isEnabled = false
         finishedSpeakingAt = Date()
+        if playbackAfterRelease { delayedGate.startDrain() }
         phase = .finishing
-        status = "Микрофон отключён · завершаю перевод"
+        status = playbackAfterRelease
+            ? "Микрофон выключен · воспроизвожу перевод с начала"
+            : "Микрофон отключён · завершаю перевод"
         guard let events, events.readyState == .open else {
             fail(ExperimentError.dataChannel)
             return
@@ -154,6 +181,9 @@ import WebRTC
         }
         connectingTask?.cancel()
         connectingTask = nil
+        drainTask?.cancel()
+        drainTask = nil
+        delayedGate.reset()
         microphoneTrack?.isEnabled = false
         events?.delegate = nil
         events?.close()
@@ -162,6 +192,8 @@ import WebRTC
         events = nil
         peer = nil
         microphoneTrack = nil
+        bufferedFactory = nil
+        bufferedDevice = nil
         channelOpen = false
         didConnect = false
         receivedEvents = 0
@@ -268,23 +300,45 @@ import WebRTC
             guard transcript.utf8.count + delta.utf8.count < 100_000 else { return }
             transcript += delta
         case "session.closed":
-            // The server has flushed its output. Allow receiver audio playout
-            // an additional moment before closing the peer.
-            let snapshot = summary()
-            diagnostic = snapshot
-            phase = .finished
-            status = "Сеанс завершён · сравни звучание с WebSocket"
+            // WebRTC may have already delivered several seconds of translated
+            // speech while the microphone was held. Never close the peer
+            // while the delayed PCM queue still contains those syllables.
             microphoneTrack?.isEnabled = false
+            diagnostic = summary()
+            status = playbackAfterRelease
+                ? "OpenAI закончил · воспроизвожу оставшийся перевод"
+                : "Сеанс завершён · сравни звучание с WebSocket"
             let token = generation
-            Task { [weak self] in
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                guard let self, self.generation == token else { return }
+            drainTask?.cancel()
+            drainTask = Task { [weak self] in
+                guard let self else { return }
+                if self.playbackAfterRelease {
+                    // Continue hardware playout of already decoded PCM after
+                    // session.closed. No additional API requests are made.
+                    let started = Date()
+                    while self.generation == token &&
+                          self.delayedGate.pendingBytes > 0 &&
+                          Date().timeIntervalSince(started) < 80 {
+                        try? await Task.sleep(nanoseconds: 100_000_000)
+                    }
+                } else {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                }
+                guard self.generation == token else { return }
+                let overflow = self.delayedGate.hasOverflowed
+                self.phase = .finished
+                self.status = overflow
+                    ? "Очередь звука переполнена — часть аудио не сохранена"
+                    : "Перевод прозвучал полностью · можно сравнивать"
                 self.events?.delegate = nil
                 self.events?.close()
+                self.peer?.delegate = nil
                 self.peer?.close()
                 self.events = nil
                 self.peer = nil
                 self.microphoneTrack = nil
+                self.bufferedFactory = nil
+                self.bufferedDevice = nil
                 try? AVAudioSession.sharedInstance().setActive(
                     false, options: .notifyOthersOnDeactivation
                 )
@@ -312,6 +366,8 @@ import WebRTC
             "last_event=\(stamp(lastEventAt))",
             "received_data_channel_events=\(receivedEvents)",
             "remote_audio_tracks=\(remoteAudioTracks)",
+            "playback_after_release=\(playbackAfterRelease)",
+            "buffered_bytes_at_close=\(delayedGate.pendingBytes)",
             "audio_output=\(audioOutput)",
             "session.closed=true",
             "Remote WebRTC audio is played by WebRTC (not stored as PCM/WAV)."
