@@ -90,14 +90,14 @@ final class BufferedWebRTCAudioDevice: NSObject {
     }
   }
 
-  private (set) lazy var inputLatency = audioSession.inputLatency {
+  private(set) lazy var inputLatency = audioSession.inputLatency {
     didSet {
       guard oldValue != inputLatency else { return }
       delegate?.notifyAudioInputParametersChange()
     }
   }
   
-  private (set) lazy var outputLatency = audioSession.outputLatency {
+  private(set) lazy var outputLatency = audioSession.outputLatency {
     didSet {
       guard oldValue != outputLatency else { return }
       delegate?.notifyAudioOutputParametersChange()
