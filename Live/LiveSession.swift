@@ -3,7 +3,7 @@ import AVFoundation
 import UIKit
 import CryptoKit
 
-@MainActor final class LiveSession: NSObject, ObservableObject, AVAudioPlayerDelegate {
+@MainActor final class LiveSession: NSObject, ObservableObject, AVAudioPlayerDelegate, AVSpeechSynthesizerDelegate {
     enum Phase { case idle, arming, recording, connecting, sending, waiting, playing }
     enum KeyStatus {
         case missing, unverified, accepted, rejected
@@ -38,6 +38,7 @@ import CryptoKit
     @Published private(set) var levels = Array(repeating: 0.0, count: 48)
     @Published private(set) var recordedWave: Data?
     @Published private(set) var translatedWave: Data?
+    @Published private(set) var translationComplete = false
     @Published private(set) var keySaved = false
     @Published private(set) var keyStatus: KeyStatus = .missing
     var keyVerified: Bool { if case .accepted = keyStatus { return true }; return false }
@@ -54,6 +55,10 @@ import CryptoKit
     private var generation = UUID()
     private var player: AVAudioPlayer?
     private var livePlayer: LiveStreamPlayer?
+    private let textSynthesizer = AVSpeechSynthesizer()
+    private var textUtterance: AVSpeechUtterance?
+    private var streamPlaybackIssue: String?
+    private var outputLocale = "de-DE"
     private var playWatch: Task<Void, Never>?
     private var direction = "ru"
     private var shareFile: URL?
@@ -65,6 +70,7 @@ import CryptoKit
     }
     override init() {
         super.init()
+        textSynthesizer.delegate = self
         refreshKey()
     }
     func refreshKey() {
@@ -138,6 +144,7 @@ import CryptoKit
             return
         }
         stopPlayer()
+        stopTextSpeech()
         livePlayer?.stop()
         livePlayer = nil
         removeShareFile()
@@ -146,8 +153,10 @@ import CryptoKit
         generation = UUID()
         let token = generation
         direction = language; held = language; phase = .arming
+        outputLocale = Self.systemVoiceLocale(language == "ru" ? partner : "ru")
         elapsed = 0; levels = Array(repeating: 0, count: 48)
         text = ""; details = ""; recordedWave = nil; translatedWave = nil
+        translationComplete = false; streamPlaybackIssue = nil
         message = "Готовлю микрофон · пока не говори"
         operation = Task { [weak self] in
             guard let self else { return }
@@ -169,7 +178,13 @@ import CryptoKit
                 stream.onEnd = { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.phase = .idle
-                    self.message = "Готово · удерживай кнопку языка"
+                    self.message = self.streamPlaybackIssue ?? "Готово · удерживай кнопку языка"
+                }
+                stream.onError = { [weak self] error in
+                    guard let self, self.generation == token else { return }
+                    self.streamPlaybackIssue = error
+                    if self.phase == .playing { self.phase = .idle }
+                    self.message = error
                 }
                 self.livePlayer = stream
 
@@ -221,6 +236,7 @@ import CryptoKit
                         case .success(let reply):
                             self.text = reply.text
                             self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
+                            self.translationComplete = !reply.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                             self.markKeyAccepted()
                             self.makeShareFile(for: reply.audio)
                             self.livePlayer?.confirmTranscript(reply.text)
@@ -230,9 +246,9 @@ import CryptoKit
                                 self.phase = .playing
                             } else {
                                 self.phase = .idle
-                                self.message = reply.text.isEmpty
+                                self.message = self.streamPlaybackIssue ?? (reply.text.isEmpty
                                     ? "Модель не вернула перевод. Запись можно проверить."
-                                    : (reply.audio.isEmpty ? "Получен только текст перевода" : "Готово · удерживай кнопку языка")
+                                    : (reply.audio.isEmpty ? "Получен только текст перевода" : "Готово · удерживай кнопку языка"))
                             }
                         case .failure(let error):
                             if let wireError = error as? WireError, case .invalidAPIKey = wireError {
@@ -311,6 +327,8 @@ import CryptoKit
         stopAll()
         removeShareFile()
         translatedWave = nil; recordedWave = nil; text = ""; details = ""
+        translationComplete = false; streamPlaybackIssue = nil
+        outputLocale = Self.systemVoiceLocale("ru")
         generation = UUID()
         let token = generation
         phase = .connecting
@@ -339,7 +357,13 @@ import CryptoKit
         stream.onEnd = { [weak self] in
             guard let self, self.generation == token else { return }
             self.phase = .idle
-            self.message = "Готово · удерживай кнопку языка"
+            self.message = self.streamPlaybackIssue ?? "Готово · удерживай кнопку языка"
+        }
+        stream.onError = { [weak self] error in
+            guard let self, self.generation == token else { return }
+            self.streamPlaybackIssue = error
+            if self.phase == .playing { self.phase = .idle }
+            self.message = error
         }
         livePlayer = stream
         stream.microphoneReleased()
@@ -377,14 +401,15 @@ import CryptoKit
                         self.markKeyAccepted()
                         self.text = reply.text
                         self.translatedWave = reply.audio.isEmpty ? nil : reply.audio
+                        self.translationComplete = !reply.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
                         self.makeShareFile(for: reply.audio)
                         self.livePlayer?.confirmTranscript(reply.text)
                         self.details += " · ответ завершён"
                         self.livePlayer?.complete()
                         if self.livePlayer?.isPlaying != true {
                             self.phase = .idle
-                            self.message = reply.audio.isEmpty ? "Получен текст перевода без звука"
-                                : "Готово · удерживай кнопку языка"
+                            self.message = self.streamPlaybackIssue ?? (reply.audio.isEmpty ? "Получен текст перевода без звука"
+                                : "Готово · удерживай кнопку языка")
                         }
                     case .failure(let error):
                         if let wireError = error as? WireError, case .invalidAPIKey = wireError {
@@ -432,7 +457,7 @@ import CryptoKit
     }
     func stopAll() {
         generation = UUID(); operation?.cancel(); operation = nil
-        recorder.cancel(); connection.cancel(); livePlayer?.stop(); livePlayer = nil; stopPlayer()
+        recorder.cancel(); connection.cancel(); livePlayer?.stop(); livePlayer = nil; stopPlayer(); stopTextSpeech()
         held = nil; phase = .idle
     }
     func background() { stopAll(); message = "Готово · удерживай кнопку языка" }
@@ -453,7 +478,55 @@ import CryptoKit
     }
     func replay() { if let audio = translatedWave, !busy { livePlayer?.stop(); play(audio, source: false) } }
     func review() { if let audio = recordedWave, !busy { livePlayer?.stop(); play(audio, source: true) } }
+
+    private static func systemVoiceLocale(_ language: String) -> String {
+        switch language {
+        case "de": return "de-DE"
+        case "en": return "en-GB"
+        case "es": return "es-ES"
+        case "ro": return "ro-RO"
+        case "pl": return "pl-PL"
+        default: return "ru-RU"
+        }
+    }
+
+    /// Free text-to-speech of the visible realtime translation, independent of OpenAI.
+    func speakText() {
+        guard translationComplete, !busy, held == nil else { return }
+        let prepared = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prepared.isEmpty else { return }
+        livePlayer?.stop()
+        stopPlayer()
+        stopTextSpeech()
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .spokenAudio)
+            try session.setActive(true)
+            guard let voice = AVSpeechSynthesisVoice(language: outputLocale) else {
+                phase = .idle
+                message = "Системный голос для выбранного языка недоступен на iPhone."
+                return
+            }
+            let utterance = AVSpeechUtterance(string: prepared)
+            utterance.voice = voice
+            utterance.rate = AVSpeechUtteranceDefaultSpeechRate
+            textUtterance = utterance
+            phase = .playing
+            message = "Звучит текст перевода · системный голос iPhone · бесплатно"
+            textSynthesizer.speak(utterance)
+        } catch {
+            phase = .idle
+            message = "Не удалось включить системное озвучивание iPhone."
+        }
+    }
+
+    private func stopTextSpeech() {
+        textUtterance = nil
+        if textSynthesizer.isSpeaking { textSynthesizer.stopSpeaking(at: .immediate) }
+    }
+
     private func play(_ audio: Data, source: Bool) {
+        stopTextSpeech()
         stopPlayer()
         do {
             let session = AVAudioSession.sharedInstance()
@@ -478,6 +551,24 @@ import CryptoKit
         player?.delegate = nil; player?.stop(); player = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            guard self.textUtterance === utterance else { return }
+            self.textUtterance = nil
+            self.phase = .idle
+            self.message = "Готово · удерживай кнопку языка"
+        }
+    }
+
+    nonisolated func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        Task { @MainActor in
+            guard self.textUtterance === utterance else { return }
+            self.textUtterance = nil
+            self.phase = .idle
+            self.message = "Озвучивание остановлено"
+        }
+    }
+
     nonisolated func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         Task { @MainActor in
             guard self.player === player else { return }
