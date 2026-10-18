@@ -430,6 +430,7 @@ struct LocalVoiceLabView: View {
     @State private var authBrowser: VoiceAuthBrowserLink?
     @State private var chatConnected = false
     @State private var chatModel = ""
+    @State private var chatModels: [ModelChoice] = []
     @State private var chatMessage = ""
     @State private var chatBusy = false
     @State private var translating = false
@@ -546,6 +547,7 @@ struct LocalVoiceLabView: View {
                     }
                     .pickerStyle(.menu)
                     .onChange(of: language) { _, _ in
+                        textEditorFocused = false
                         // Always translate from the user's original, never from a prior translation.
                         resetTranslation()
                         requestTranslation()
@@ -569,6 +571,17 @@ struct LocalVoiceLabView: View {
                                 Text(chatMessage).font(.footnote).foregroundStyle(.secondary)
                             }
                         } else {
+                            if !chatModels.isEmpty {
+                                Picker("Модель ChatGPT", selection: $chatModel) {
+                                    ForEach(chatModels) { item in Text(item.name).tag(item.id) }
+                                }
+                                .pickerStyle(.menu)
+                                .onChange(of: chatModel) { _, selected in
+                                    try? SessionStore.defaults().set(selected, forKey: "model")
+                                    resetTranslation()
+                                    requestTranslation()
+                                }
+                            }
                             if translating {
                                 HStack {
                                     ProgressView().tint(.white)
@@ -689,6 +702,7 @@ struct LocalVoiceLabView: View {
             guard let saved = try SessionStore.load() else { return }
             let session = try await OpenAI.refresh(saved)
             let available = try await OpenAI.models(session)
+            chatModels = available
             guard !available.isEmpty else { throw Failure.message("Нет доступных моделей ChatGPT.") }
             let wanted = try SessionStore.defaults().string(forKey: "model") ?? ""
             chatModel = available.first(where: { $0.id == wanted })?.id ?? available[0].id
@@ -723,7 +737,7 @@ struct LocalVoiceLabView: View {
             let session = try await OpenAI.refresh(saved)
             let available = try await OpenAI.models(session)
             guard !available.isEmpty else { throw Failure.message("Нет доступных моделей ChatGPT.") }
-            chatModel = available[0].id
+            chatModel = available.first(where: { $0.id == "gpt-6-luna" })?.id ?? available[0].id
             try SessionStore.defaults().set(chatModel, forKey: "model")
             chatConnected = true
             chatMessage = "ChatGPT подключён."
