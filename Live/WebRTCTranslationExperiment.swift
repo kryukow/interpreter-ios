@@ -238,42 +238,22 @@ import WebRTC
     }
 
     private static func fetchShortLivedSecret(key: String, target: String) async throws -> String {
-        guard ["ru", "de", "en", "ro", "es", "pl"].contains(target) else {
-            throw ExperimentError.language
-        }
-        let url = URL(string: "https://api.openai.com/v1/realtime/translations/client_secrets")!
+        let url = WebRTCTranslationProtocol.clientSecretsEndpoint
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 25
         request.setValue("Bearer " + key, forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: [
-            "session": [
-                "model": "gpt-realtime-translate",
-                "audio": [
-                    "input": ["noise_reduction": NSNull(), "transcription": NSNull()],
-                    "output": ["language": target]
-                ]
-            ]
-        ])
+        request.httpBody = try WebRTCTranslationProtocol.sessionJSON(target: target)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
             throw ExperimentError.secretRequest
         }
-        guard let parsed = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            throw ExperimentError.secretRequest
-        }
-        let nested = parsed["client_secret"] as? [String: Any]
-        guard let secret = (parsed["client_secret"] as? String)
-            ?? (nested?["value"] as? String) ?? (parsed["value"] as? String),
-              !secret.isEmpty else { throw ExperimentError.secretRequest }
-        return secret
+        return try WebRTCTranslationProtocol.shortLivedSecret(response: data)
     }
 
     private static func exchangeSDP(_ offer: String, secret: String) async throws -> String {
-        var request = URLRequest(url: URL(
-            string: "https://api.openai.com/v1/realtime/translations/calls"
-        )!)
+        var request = URLRequest(url: WebRTCTranslationProtocol.callsEndpoint)
         request.httpMethod = "POST"
         request.timeoutInterval = 25
         request.setValue("Bearer " + secret, forHTTPHeaderField: "Authorization")
@@ -281,10 +261,8 @@ import WebRTC
         request.httpBody = Data(offer.utf8)
         let (data, response) = try await URLSession.shared.data(for: request)
         guard let http = response as? HTTPURLResponse,
-              (200...299).contains(http.statusCode),
-              let answer = String(data: data, encoding: .utf8),
-              answer.hasPrefix("v=0") else { throw ExperimentError.sdp }
-        return answer
+              (200...299).contains(http.statusCode) else { throw ExperimentError.sdp }
+        return try WebRTCTranslationProtocol.answerSDP(response: data)
     }
 
     private static func createOffer(_ pc: RTCPeerConnection) async throws -> RTCSessionDescription {
