@@ -23,6 +23,10 @@ jobs:
         run: |
           swiftc Live/StreamAudioIntegrity.swift LiveTests/test_stream_audio_integrity.swift -o "$RUNNER_TEMP/live-stream-tests"
           "$RUNNER_TEMP/live-stream-tests"
+      - name: Test safe trimming of digital silence
+        run: |
+          swiftc Live/DigitalSilenceCompactor.swift LiveTests/test_silence_compactor.swift -o "$RUNNER_TEMP/live-silence-tests"
+          "$RUNNER_TEMP/live-silence-tests"
       - name: Test Russian proofreading and translation routing
         run: |
           swiftc Live/VoiceSynthesisLanguage.swift Live/VoiceTextProcessingPolicy.swift LiveTests/test_proofreading.swift -o "$RUNNER_TEMP/live-proofreading-tests"
