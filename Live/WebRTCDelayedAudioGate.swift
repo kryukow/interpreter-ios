@@ -15,6 +15,7 @@ final class WebRTCDelayedAudioGate {
     private var capturedBytes = 0
     private var droppedBytes = 0
     private var zeroRunBytes = 0
+    private var hasStartedAudio = false
     private let maxZeroBytes: Int
 
     init(capacityBytes: Int = 48_000 * 2 * 2 * 65,
@@ -31,6 +32,7 @@ final class WebRTCDelayedAudioGate {
         capturedBytes = 0
         droppedBytes = 0
         zeroRunBytes = 0
+        hasStartedAudio = false
         mode = .capture
         lock.unlock()
     }
@@ -46,6 +48,7 @@ final class WebRTCDelayedAudioGate {
         mode = .direct
         used = 0
         zeroRunBytes = 0
+        hasStartedAudio = false
         lock.unlock()
     }
 
@@ -80,13 +83,17 @@ final class WebRTCDelayedAudioGate {
             i += 2
         }
         if mode == .direct { return hasSignal }
-        if hasSignal { zeroRunBytes = 0 }
-        else { zeroRunBytes += byteCount }
+        if hasSignal {
+            hasStartedAudio = true
+            zeroRunBytes = 0
+        } else {
+            zeroRunBytes += byteCount
+        }
 
         // Keep up to 1 second of contiguous zeros between speech fragments.
         // A server-emitted trailing zero run cannot exhaust memory or prolong
         // the delayed playback for 20+ seconds.
-        if hasSignal || zeroRunBytes <= maxZeroBytes {
+        if hasSignal || (hasStartedAudio && zeroRunBytes <= maxZeroBytes) {
             for i in 0..<byteCount {
                 if used == bytes.count {
                     droppedBytes += byteCount - i
