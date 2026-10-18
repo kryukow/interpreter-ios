@@ -173,6 +173,19 @@ struct LiveView: View {
                 }
                 .frame(minHeight: 27)
 
+                if usingWebRTC && rtc.phase == .finishing {
+                    Button {
+                        rtcHeld = nil
+                        rtc.disconnect()
+                        rtcNotice = "Воспроизведение прервано · можешь говорить снова"
+                    } label: {
+                        Label("Остановить воспроизведение", systemImage: "stop.circle")
+                            .font(.caption.weight(.medium))
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityHint("Прерывает перевод и разблокирует кнопки и переключение соединения")
+                }
+
                 BalanceSummary(account: model)
                 if usingWebRTC {
                     Text("WebRTC использует тот же API-ключ, но его расходы пока не вычитаются из локального счётчика.")
