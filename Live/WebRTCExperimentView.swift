@@ -78,13 +78,14 @@ struct WebRTCExperimentView: View {
                 .contentShape(RoundedRectangle(cornerRadius: 24))
                 .onLongPressGesture(minimumDuration: 0, maximumDistance: 130,
                                     pressing: { pressed in
-                    guard engine.canTalk || engine.isSpeaking else { return }
-                    if pressed && !holding {
+                    if !pressed {
+                        if holding {
+                            holding = false
+                            engine.endSpeaking()
+                        }
+                    } else if engine.canTalk && !holding {
                         holding = true
                         engine.beginSpeaking()
-                    } else if !pressed && holding {
-                        holding = false
-                        engine.endSpeaking()
                     }
                 }, perform: {})
 
