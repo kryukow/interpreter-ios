@@ -123,6 +123,9 @@ jobs:
           assert "playback_completion=" in protocol
           assert "НОВАЯ ФРАЗА" in view and "engine.connect(target: target)" in view
           assert "if engine.phase == .finished || engine.phase == .failed || engine.phase == .idle" in view
+          assert "renderedBytes: self.delayedGate.renderedBytes" in protocol
+          assert "renderedPCMBytes += emitted" in buffered
+          assert "renderedBytes > previousRendered" in drain
           assert "consumeRemainingPCM()" in protocol
           assert "private func playRemainingAudio" in protocol
           assert "audioPlayerDidFinishPlaying" in protocol
