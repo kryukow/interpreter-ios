@@ -4,7 +4,8 @@ import Foundation
 /// Plays the PCM16 translation stream after microphone release.
 /// The original server audio is retained separately for free replay.
 /// The byte audit checks fidelity *after* intentional removal of long exact-zero
-/// silence, not semantic translation accuracy. Original server WAV is untouched.
+/// silence and optional voice gain, not semantic translation accuracy.
+/// Original server WAV is untouched.
 @MainActor final class LiveStreamPlayer {
     private enum PlaybackError: Error { case invalidBuffer }
 
@@ -22,6 +23,7 @@ import Foundation
     private var token = UUID()
     private(set) var isPlaying = false
 
+    var enhancePlayback = true
     var onStart: (() -> Void)?
     var onEnd: (() -> Void)?
     var onError: ((String) -> Void)?
@@ -36,8 +38,9 @@ import Foundation
         // Compact only exact digital silence for real-time presentation.
         let audible = silenceCompactor.process(pcm)
         guard !audible.isEmpty else { return }
-        integrity.receive(audible)
-        pending.append(audible)
+        let prepared = enhancePlayback ? TranslationPlaybackAudio.raiseSpeechLevel(audible) : audible
+        integrity.receive(prepared)
+        pending.append(prepared)
         flush()
     }
 

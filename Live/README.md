@@ -219,3 +219,29 @@ client cannot safely remove that delay/segment using this zero-only approach.
 without any silence editing, so A/B diagnosis stays possible. No extra paid call.
 The offline silence test confirms cross-chunk caps, unchanged active speech,
 unchanged short pauses, and retention of the original semantics on playback.
+
+## 1.4.15 (25): audible, gap-reduced translation replay
+
+The experiment in 1.4.14 shortened digital silence only while receiving the
+live stream. Its **Прослушать** button still played the untouched WAV, including
+multi-second pauses and server padding. Version 1.4.15 corrects that asymmetry.
+
+**Улучшать звук OpenAI** (enabled by default, switchable in Settings) now:
+- applies about +6.02 dB amplitude boost to quiet/medium-level PCM samples
+  with a soft limiter to avoid integer overflow on louder sounds;
+- maintains the 650-ms cap on consecutive exactly-zero gaps in initial
+  stream playback; server delivery can still introduce real-time waiting;
+- uses a separate, locally processed WAV for the **Прослушать** replay, with
+  inter-sentence zero gaps capped at 650 ms and silent tail to 250 ms;
+- leaves the server-produced translated WAV unmodified for export/sharing,
+  and adds **Оригинальный голос OpenAI · без обработки** for comparison.
+
+All local processing uses Foundation and AVFoundation without additional API
+calls. Processing changes presentation volume and silence only, not the
+model's selected words or its natural timbre. It cannot guarantee Apple-TTS
+voice quality or fix silence *between* delayed server network events.
+
+Run the protocol, stream integrity, silence and replay audio tests, Xcode
+simulator and iPhone compilation. Re-test on an actual iPhone with both
+speaker and headphones, and inspect the audio route when comparing Apple
+and OpenAI voices. The branch is a draft for testing, not a production release.

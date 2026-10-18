@@ -189,6 +189,13 @@ struct LiveView: View {
                             }
                             .font(.caption)
                             .disabled(model.busy)
+                            if model.enhanceTranslationPlayback {
+                                Button("Оригинальный голос OpenAI · без обработки") {
+                                    model.replayOriginalTranslation()
+                                }
+                                .font(.caption2)
+                                .disabled(model.busy)
+                            }
                         }
                         if model.translationComplete {
                             Button {
@@ -557,6 +564,9 @@ struct LiveSettings: View {
                 Section("Голосовой перевод") {
                     Text("gpt-realtime-translate")
                     Text("Отдельная платная модель OpenAI для голосового перевода.").font(.footnote)
+                    Toggle("Улучшать звук OpenAI", isOn: $model.enhanceTranslationPlayback)
+                    Text("При воспроизведении повышает громкость речи приблизительно на 6 дБ и сокращает длинные цифровые паузы. Экспортируемый WAV остаётся оригинальным. Без дополнительных API-запросов.")
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("API-ключ") {
                     HStack(spacing: 10) {

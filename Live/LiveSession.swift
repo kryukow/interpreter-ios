@@ -39,6 +39,10 @@ import CryptoKit
     @Published private(set) var recordedWave: Data?
     @Published private(set) var translatedWave: Data?
     @Published private(set) var translationComplete = false
+    @Published var enhanceTranslationPlayback: Bool =
+        (UserDefaults.standard.object(forKey: "live.enhanceTranslationPlayback") as? Bool ?? true) {
+        didSet { UserDefaults.standard.set(enhanceTranslationPlayback, forKey: "live.enhanceTranslationPlayback") }
+    }
     @Published private(set) var keySaved = false
     @Published private(set) var keyStatus: KeyStatus = .missing
     var keyVerified: Bool { if case .accepted = keyStatus { return true }; return false }
@@ -170,6 +174,7 @@ import CryptoKit
             do {
                 guard let key = try LiveKey.read() else { throw LiveKey.KeyError.invalid }
                 let stream = LiveStreamPlayer()
+                stream.enhancePlayback = self.enhanceTranslationPlayback
                 stream.onStart = { [weak self] in
                     guard let self, self.generation == token else { return }
                     self.phase = .playing
@@ -349,6 +354,7 @@ import CryptoKit
         details = String(format: "Аудиофайл · %.1f с · \(PartnerLanguage.current(partner).name) → Русский", elapsed)
 
         let stream = LiveStreamPlayer()
+        stream.enhancePlayback = enhanceTranslationPlayback
         stream.onStart = { [weak self] in
             guard let self, self.generation == token else { return }
             self.phase = .playing
@@ -476,7 +482,24 @@ import CryptoKit
             shareURL = url
         } catch { shareFile = nil; shareURL = nil }
     }
-    func replay() { if let audio = translatedWave, !busy { livePlayer?.stop(); play(audio, source: false) } }
+    /// Replaying the voice should be conversational: unlike the original WAV,
+    /// this optional presentation copy removes digital tail padding and boosts voice.
+    func replay() {
+        guard let original = translatedWave, !busy else { return }
+        livePlayer?.stop()
+        if enhanceTranslationPlayback,
+           let improved = try? TranslationPlaybackAudio.improvedReplayWAV(original) {
+            play(improved, source: false)
+        } else {
+            play(original, source: false)
+        }
+    }
+    /// Always gives access to the untouched response for quality comparison.
+    func replayOriginalTranslation() {
+        guard let original = translatedWave, !busy else { return }
+        livePlayer?.stop()
+        play(original, source: false)
+    }
     func review() { if let audio = recordedWave, !busy { livePlayer?.stop(); play(audio, source: true) } }
 
     private static func systemVoiceLocale(_ language: String) -> String {
