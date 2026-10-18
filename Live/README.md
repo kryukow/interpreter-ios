@@ -181,3 +181,41 @@ an iPhone 16 Pro before enabling the voice in the translation pipeline.
 
 Sources: https://github.com/iliasaz/chatterbox-coreml and
 https://github.com/resemble-ai/chatterbox (MIT license).
+
+## Interpreter Live 1.4.14 (24): translation voice fallback and stream audit
+
+Only the main **gpt-realtime-translate** conversation and imported-audio paths change.
+The Chatterbox local voice model, Russian proofreading, transcription, and
+existing user preferences remain as in 1.4.13.
+
+After the server completes a translation, **Озвучить текст перевода · голос iPhone**
+speaks the *visible translated text* using Apple's on-device `AVSpeechSynthesizer`
+in the appropriate target locale (ru-RU, de-DE, en-GB, es-ES, etc.). It does not
+consume extra OpenAI API credits. It is a different voice from OpenAI's audio.
+The existing original OpenAI WAV playback and export remain available.
+
+The live PCM player checks that bytes accepted from the server were scheduled to
+the audio node in exactly their original order (byte count plus rolling
+fingerprint). Buffer creation or scheduling errors become visible rather than
+silently losing a fragment. This audit **cannot** detect words changed inside a
+valid audio response produced by the model; comparing the displayed text to the
+spoken content still requires listening.
+
+GitHub CI must verify the existing 1.4.13 safeguards plus the new stream-audit
+tests and iOS builds. Device tests should verify both languages, long phrases,
+pauses, imported audio, interruption/resumption, original WAV replay, and local
+text speech. Successful compilation is not an on-device speech-quality test.
+
+### Long pauses in the returned realtime voice (two field samples)
+
+OpenAI's original audio can include very long exact-zero gaps between phrases and
+around 15 seconds of digitally silent tail padding. In 1.4.14 we remove only
+*consecutive exact-zero PCM16 samples beyond 650 ms* in the streaming player;
+all actual nonzero speech samples and short pauses are preserved unchanged.
+This is deliberately not a natural-speech VAD or a model latency fix: if an
+OpenAI response arrives late or contains quiet nonzero background noise, the
+client cannot safely remove that delay/segment using this zero-only approach.
+`TranslationConnection` retains the original server WAV for export/replay,
+without any silence editing, so A/B diagnosis stays possible. No extra paid call.
+The offline silence test confirms cross-chunk caps, unchanged active speech,
+unchanged short pauses, and retention of the original semantics on playback.

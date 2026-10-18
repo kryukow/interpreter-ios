@@ -190,6 +190,17 @@ struct LiveView: View {
                             .font(.caption)
                             .disabled(model.busy)
                         }
+                        if model.translationComplete {
+                            Button {
+                                model.speakText()
+                            } label: {
+                                Label("Озвучить текст перевода · голос iPhone", systemImage: "speaker.wave.2")
+                            }
+                            .font(.caption)
+                            .disabled(model.busy)
+                            Text("Точное озвучивание текста на экране без нового API-запроса. Голос отличается от OpenAI.")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                         if model.recordedWave != nil {
                             Button("Послушать свою запись") { model.review() }
                                 .font(.caption)
