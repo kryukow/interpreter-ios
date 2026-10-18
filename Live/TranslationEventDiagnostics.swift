@@ -191,7 +191,7 @@ struct TranslationEventDiagnostics {
         let inputExcerpts = inputLevels.enumerated().filter { item in
             item.offset < 5 || item.offset >= max(0, inputLevels.count - 15) ||
             nearbyInput.contains(where: { $0.line == item.element.line })
-        }.map(\.element)
+        }.map { $0.element }
         var result = [
             "Interpreter Live — gpt-realtime-translate event diagnostic",
             "Metadata only: no speech, transcript, API key or raw PCM included.",
