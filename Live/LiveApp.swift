@@ -14,13 +14,16 @@ private var liveVersion: String {
 
 struct LiveView: View {
     @StateObject private var model = LiveSession()
+    @StateObject private var rtc = WebRTCTranslationExperiment()
     @StateObject private var voiceLab = LocalVoiceLab()
     @State private var settings = false
     @State private var exporting = false
     @State private var importing = false
     @State private var showTranscription = false
     @State private var showVoiceLab = false
-    @State private var showWebRTCExperiment = false
+    @AppStorage("live.connectionTransport") private var connectionTransport = LiveTransport.webSocket.rawValue
+    @State private var rtcHeld: String?
+    @State private var rtcNotice = ""
     @State private var document: RecordingDocument?
     @State private var exportError = false
     @State private var importError: String?
@@ -37,6 +40,25 @@ struct LiveView: View {
 
     private var partner: PartnerLanguage { PartnerLanguage.current(partnerCode) }
     private var languages: [PartnerLanguage] { PartnerLanguage.allCases }
+    private var usingWebRTC: Bool { connectionTransport == LiveTransport.webRTC.rawValue }
+    private var rtcBusy: Bool {
+        switch rtc.phase {
+        case .connecting, .ready, .speaking, .finishing: return true
+        case .idle, .finished, .failed: return false
+        }
+    }
+    private var transportBusy: Bool { model.busy || rtcBusy || rtcHeld != nil }
+    private var canChangeLanguage: Bool { model.phase == .idle && !rtcBusy && rtcHeld == nil }
+    private var homeStatus: String {
+        guard usingWebRTC else {
+            return model.message == "Удерживай кнопку нужного языка" ? "Готово" : model.message
+        }
+        if rtc.phase == .connecting && rtcHeld != nil {
+            return "Подключаю WebRTC · держи кнопку · говори после вибросигнала"
+        }
+        if rtc.phase == .idle && !rtcNotice.isEmpty { return rtcNotice }
+        return rtc.phase == .idle ? "Готово · удерживай нужный язык" : rtc.status
+    }
 
     var body: some View {
         ScrollView {
@@ -67,10 +89,24 @@ struct LiveView: View {
                             .font(.title2.weight(.medium))
                             .frame(width: 36, height: 36)
                     }
-                    .disabled(model.busy)
+                    .disabled(transportBusy)
                     .accessibilityLabel("Настройки")
                 }
                 .padding(.top, 12)
+
+                Picker("Соединение", selection: $connectionTransport) {
+                    Text("WebSocket").tag(LiveTransport.webSocket.rawValue)
+                    Text("WebRTC").tag(LiveTransport.webRTC.rawValue)
+                }
+                .pickerStyle(.segmented)
+                .disabled(transportBusy)
+                .accessibilityLabel("Способ соединения")
+                .onChange(of: connectionTransport) { _, _ in
+                    rtcHeld = nil
+                    rtc.disconnect()
+                    rtcNotice = ""
+                    model.stopAll()
+                }
 
                 ZStack {
                     Image(systemName: "infinity")
@@ -100,7 +136,7 @@ struct LiveView: View {
                         .buttonStyle(.plain)
                         .offset(x: CGFloat(distance) * 70)
                         .opacity(orbitActive ? 1 : 0)
-                        .allowsHitTesting(orbitActive && model.phase == .idle)
+                        .allowsHitTesting(orbitActive && canChangeLanguage)
                         .accessibilityLabel(choice.name)
                     }
                     Text("\(partner.shortCode) · \(partner.name) · выбрано")
@@ -114,15 +150,23 @@ struct LiveView: View {
                 .animation(.spring(response: 0.29, dampingFraction: 0.85), value: partnerCode)
                 .sensoryFeedback(.selection, trigger: partnerCode)
 
-                MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
-                    .frame(height: 23)
+                if usingWebRTC {
+                    Image(systemName: "waveform")
+                        .symbolEffect(.variableColor, isActive: rtc.phase == .speaking)
+                        .foregroundStyle(.secondary)
+                        .frame(height: 23)
+                        .accessibilityLabel(rtc.phase == .speaking ? "Идёт запись" : "Ожидание записи")
+                } else {
+                    MicrophoneWaveform(levels: model.levels, recording: model.phase == .recording)
+                        .frame(height: 23)
+                }
 
                 VStack(spacing: 3) {
-                    Text(model.message == "Удерживай кнопку нужного языка" ? "Готово" : model.message)
+                    Text(homeStatus)
                         .font(.subheadline.weight(.semibold))
                         .multilineTextAlignment(.center)
-                        .lineLimit(2)
-                    if model.phase == .recording {
+                        .lineLimit(3)
+                    if !usingWebRTC && model.phase == .recording {
                         Text(String(format: "● %.1f с", model.elapsed))
                             .font(.caption.monospacedDigit())
                     }
@@ -130,29 +174,18 @@ struct LiveView: View {
                 .frame(minHeight: 27)
 
                 BalanceSummary(account: model)
+                if usingWebRTC {
+                    Text("WebRTC использует тот же API-ключ, но его расходы пока не вычитаются из локального счётчика.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
 
                 HStack(spacing: 12) {
                     talk("Русский", language: "ru", target: "→ \(partner.uppercaseName)")
                     talk(partner.buttonName, language: partner.rawValue, target: "→ РУССКИЙ")
                 }
                 .frame(height: 136)
-
-                Button {
-                    model.stopAll()
-                    showWebRTCExperiment = true
-                } label: {
-                    HStack(spacing: 9) {
-                        Image(systemName: "network")
-                        Text("WebRTC · проверить звучание без WebSocket")
-                        Spacer()
-                        Image(systemName: "chevron.right").font(.caption)
-                    }
-                    .font(.caption.weight(.semibold))
-                    .padding(12)
-                    .background(Color(white: 0.105), in: RoundedRectangle(cornerRadius: 14))
-                }
-                .buttonStyle(.plain)
-                .disabled(model.busy)
 
                 HStack(spacing: 10) {
                     HomeFeatureTile(title: "Голос → текст",
@@ -166,7 +199,7 @@ struct LiveView: View {
                         showVoiceLab = true
                     }
                 }
-                .disabled(model.busy)
+                .disabled(transportBusy)
 
                 HStack {
                     Button {
@@ -174,15 +207,36 @@ struct LiveView: View {
                     } label: {
                         Label("Импорт аудио", systemImage: "square.and.arrow.down")
                     }
-                    .disabled(model.busy)
+                    .disabled(transportBusy)
                     Spacer()
                     Text(liveVersion)
                 }
                 .font(.caption2)
                 .foregroundStyle(.secondary)
 
-                if !model.text.isEmpty || !model.details.isEmpty ||
-                   model.recordedWave != nil || model.translatedWave != nil {
+                if usingWebRTC && !rtc.transcript.isEmpty {
+                    VStack(alignment: .leading, spacing: 9) {
+                        Text("Текст перевода")
+                            .font(.subheadline.weight(.semibold))
+                        Text(rtc.transcript)
+                            .font(.subheadline)
+                            .textSelection(.enabled)
+                        if !rtc.diagnostic.isEmpty {
+                            Button {
+                                UIPasteboard.general.string = rtc.diagnostic
+                            } label: {
+                                Label("Копировать диагностику WebRTC", systemImage: "doc.on.doc")
+                            }
+                            .font(.caption)
+                        }
+                    }
+                    .padding(14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color(white: 0.075), in: RoundedRectangle(cornerRadius: 16))
+                }
+
+                if !usingWebRTC && (!model.text.isEmpty || !model.details.isEmpty ||
+                   model.recordedWave != nil || model.translatedWave != nil) {
                     VStack(alignment: .leading, spacing: 11) {
                         if !model.text.isEmpty {
                             Text(model.text).font(.subheadline)
@@ -259,16 +313,6 @@ struct LiveView: View {
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
         .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView(engine: voiceLab) }
-        .sheet(isPresented: $showWebRTCExperiment) {
-            NavigationStack {
-                WebRTCExperimentView()
-                    .toolbar {
-                        ToolbarItem(placement: .confirmationAction) {
-                            Button("Закрыть") { showWebRTCExperiment = false }
-                        }
-                    }
-            }
-        }
         .sheet(isPresented: $importing) {
             RecordingDocumentPicker(
                 onSelected: { url in
@@ -308,6 +352,16 @@ struct LiveView: View {
             orbitHide?.cancel()
             UIApplication.shared.isIdleTimerDisabled = false
             model.background()
+            rtcHeld = nil
+            rtc.disconnect()
+        }
+        .onChange(of: rtc.phase) { _, phase in
+            if phase == .ready, rtcHeld != nil, usingWebRTC {
+                // Only starts the microphone if the original touch is still held.
+                rtc.beginSpeaking()
+            } else if phase == .failed {
+                rtcHeld = nil
+            }
         }
         .onChange(of: keepAwake) { _, _ in updateAwake() }
         .onChange(of: voiceWarmupEnabled) { _, enabled in
@@ -319,6 +373,8 @@ struct LiveView: View {
             if phase != .active {
                 voiceWarmupTask?.cancel()
                 model.background()
+                rtcHeld = nil
+                rtc.disconnect()
             } else {
                 scheduleVoiceWarmup()
             }
@@ -337,7 +393,7 @@ struct LiveView: View {
     private var languageDrag: some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
-                guard model.phase == .idle else { return }
+                guard canChangeLanguage else { return }
                 if !orbitStarted {
                     orbitHide?.cancel()
                     orbitDragStart = languages.firstIndex(of: partner) ?? 0
@@ -355,7 +411,7 @@ struct LiveView: View {
     }
 
     private func selectLanguage(_ choice: PartnerLanguage) {
-        guard model.phase == .idle else { return }
+        guard canChangeLanguage else { return }
         partnerCode = choice.rawValue
     }
 
@@ -369,12 +425,73 @@ struct LiveView: View {
     }
 
     private func talk(_ title: String, language: String, target: String) -> some View {
-        PressButton(title: title, subtitle: target, pressed: model.held == language,
-                    enabled: !model.busy || model.held == language,
-                    begin: { model.begin(language, partner: partner.rawValue) },
-                    end: { model.end(language) },
-                    cancel: { model.abortPress(language) })
+        PressButton(title: title, subtitle: target,
+                    pressed: usingWebRTC ? rtcHeld == language : model.held == language,
+                    enabled: usingWebRTC
+                        ? (rtcHeld == language || (rtcHeld == nil && !rtcBusy && model.phase == .idle))
+                        : (!model.busy || model.held == language),
+                    begin: {
+                        if usingWebRTC {
+                            beginRTCTurn(source: language)
+                        } else {
+                            model.begin(language, partner: partner.rawValue)
+                        }
+                    },
+                    end: {
+                        if usingWebRTC {
+                            endRTCTurn(source: language)
+                        } else {
+                            model.end(language)
+                        }
+                    },
+                    cancel: {
+                        if usingWebRTC {
+                            cancelRTCTurn(source: language)
+                        } else {
+                            model.abortPress(language)
+                        }
+                    })
             .frame(maxWidth: .infinity)
+    }
+
+    private func beginRTCTurn(source: String) {
+        guard usingWebRTC, rtcHeld == nil, !rtcBusy, model.phase == .idle else { return }
+        guard model.keySaved else {
+            rtcNotice = "Добавь API-ключ OpenAI в настройках"
+            return
+        }
+        guard let target = LiveTranslationDirection.output(forSource: source, partner: partner) else {
+            rtcNotice = "Неизвестное направление перевода"
+            return
+        }
+        rtcNotice = ""
+        rtcHeld = source
+        // A new session is requested only after a real touch, never in idle.
+        rtc.playbackAfterRelease = true
+        rtc.connect(target: target)
+    }
+
+    private func endRTCTurn(source: String) {
+        guard rtcHeld == source else { return }
+        rtcHeld = nil
+        switch rtc.phase {
+        case .speaking:
+            rtc.endSpeaking()
+        case .connecting, .ready:
+            // Not connected in time. Crucially, no silent audio loss:
+            // do not claim the first words were recorded.
+            rtc.disconnect()
+            rtcNotice = "Отпущено до готовности WebRTC · удерживай дольше и дождись вибросигнала"
+        case .idle, .finished, .failed, .finishing:
+            break
+        }
+    }
+
+    private func cancelRTCTurn(source: String) {
+        guard rtcHeld == source else { return }
+        rtcHeld = nil
+        rtc.disconnect()
+        rtcNotice = "Запись отменена"
     }
 
     /// Prepare the previously downloaded local voice weights opportunistically.
@@ -404,7 +521,7 @@ struct LiveView: View {
                 if showVoiceLab { return } // visible sheet offers a manual load
                 let thermal = ProcessInfo.processInfo.thermalState
                 guard thermal != .serious && thermal != .critical else { return }
-                if model.phase == .idle && !model.busy && !voiceLab.busy {
+                if model.phase == .idle && !model.busy && !voiceLab.busy && !rtcBusy {
                     voiceWarmupAttempted = true
                     voiceLab.warmupIfAvailable()
                     return
