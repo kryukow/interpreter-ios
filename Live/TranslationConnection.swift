@@ -164,7 +164,7 @@ struct TranslationReply {
                         try await socket.send(.string(try TranslationWire.append(frame)))
                         guard self.generation == token else { return }
                         self.sentBytes += frame.count
-                        self.diagnostics?.inputFrameSent(byteCount: frame.count)
+                        self.diagnostics?.inputFrameSent(frame)
                         self.onProgress?(self.sentBytes)
                     } else if self.inputEnded {
                         self.closeSent = true

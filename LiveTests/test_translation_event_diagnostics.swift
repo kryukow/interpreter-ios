@@ -10,7 +10,10 @@ import Foundation
         var recorder = TranslationEventDiagnostics(target: "de", configuration: config,
                                                    startedAt: base, uptime: 100)
         recorder.note("session.created", date: base, uptime: 100.05)
-        recorder.inputFrameSent(byteCount: 9_600)
+        let input = Data(repeating: 0, count: 9_600)
+        recorder.inputFrameSent(input, date: base.addingTimeInterval(0.1), uptime: 100.1)
+        recorder.inputFrameSent(Data(repeating: 0x40, count: 9_600),
+                                date: base.addingTimeInterval(2), uptime: 102)
         recorder.closeSent(date: base.addingTimeInterval(0.2), uptime: 100.2)
         let silent = Data(repeating: 0, count: 2 * 24_000)
         let voiced = Data([10, 0, 255, 255])
@@ -26,11 +29,18 @@ import Foundation
         require(report.contains("session.close sent: true; session.closed received: true"), "Close handshake missing")
         require(report.contains("arrival_gap_ms=2000.0"), "Wall-clock audio gap missing")
         require(report.contains("all_zero=true"), "Silent delta not detected")
+        require(report.contains("rms_dBFS=-inf") && report.contains("peak_dBFS=-inf"),
+                "Zero microphone frame level missing")
+        require(report.contains("near_silent_lt_-45dBFS=true"), "Silence indicator missing")
+        require(report.contains("input.frame #2") && report.contains("near_silent_lt_-45dBFS=false"),
+                "Voiced input frame missing")
+        require(report.contains("Input near-silent frames (RMS < -45 dBFS, diagnostic only): 1/2"),
+                "Input frame summary missing")
         require(report.contains("event_id=evt-test"), "Optional event ID missing")
         require(report.contains("server_elapsed_ms=200"), "Optional server elapsed missing")
         require(report.contains("internal") && report.contains("trailing"), "Cross-chunk zero run missing")
         require(report.contains("session.update JSON: "+config), "Exact config missing")
-        require(report.contains("input PCM bytes: 9600"), "Input frame count missing")
+        require(report.contains("input PCM bytes: 19200"), "Input frame count missing")
         require(!report.contains("Bearer ") && !report.contains("transcript.delta: "), "Sensitive content leaked")
         print("Realtime event diagnostics tests passed")
     }
