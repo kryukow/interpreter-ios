@@ -1,47 +1,66 @@
 import Foundation
 
-/// Locally shortens only **exactly zero-valued** PCM16 samples from the
-/// already translated OpenAI audio. Non-zero samples are never altered.
-/// The original WAV remains untouched in TranslationConnection.
+/// Shortens only exactly zero-valued PCM16 samples, without touching a
+/// single non-zero speech sample. Unlike truncating a silent run from the
+/// front, it retains quiet space on *both* sides of a long phrase boundary.
+///
+/// The trailing zero context is held until the next non-zero sample (or
+/// finish), which also handles arbitrary network chunk boundaries.
+/// The server's original WAV is never modified.
 struct DigitalSilenceCompactor {
     static let sampleRate = 24_000
-    static let retainedSilenceSamples = sampleRate * 65 / 100 // 650 ms
+    static let precedingSilenceSamples = sampleRate * 45 / 100 // 450 ms after preceding word
+    static let followingSilenceSamples = sampleRate * 40 / 100 // 400 ms before next word
+    static let retainedSilenceSamples = precedingSilenceSamples + followingSilenceSamples
 
     private var continuousZeroSamples = 0
+    private var bufferedTrailingZeros = 0
     private(set) var droppedZeroSamples = 0
 
-    /// Takes interleaved mono PCM16 little-endian at 24 kHz.
-    /// State is retained between arbitrary server delta boundaries.
     mutating func process(_ pcm: Data) -> Data {
         guard !pcm.isEmpty, pcm.count.isMultiple(of: 2) else { return pcm }
         let bytes = [UInt8](pcm)
         var output = Data()
         output.reserveCapacity(pcm.count)
-        var position = 0
+        var i = 0
 
-        while position < bytes.count {
-            let zero = bytes[position] == 0 && bytes[position + 1] == 0
-            let start = position
+        while i < bytes.count {
+            let silent = bytes[i] == 0 && bytes[i + 1] == 0
+            let start = i
             repeat {
-                position += 2
-            } while position < bytes.count &&
-                (bytes[position] == 0 && bytes[position + 1] == 0) == zero
+                i += 2
+            } while i < bytes.count && (bytes[i] == 0 && bytes[i + 1] == 0) == silent
 
-            let samples = (position - start) / 2
-            if zero {
-                let allowed = max(0, Self.retainedSilenceSamples - continuousZeroSamples)
-                let keep = min(allowed, samples)
-                if keep > 0 {
-                    output.append(contentsOf: bytes[start..<(start + keep * 2)])
+            let samples = (i - start) / 2
+            if silent {
+                let headRoom = max(0, Self.precedingSilenceSamples - continuousZeroSamples)
+                let keepNow = min(headRoom, samples)
+                if keepNow > 0 {
+                    output.append(contentsOf: bytes[start..<(start + keepNow * 2)])
                 }
+                let remainder = samples - keepNow
+                let oldTail = bufferedTrailingZeros
+                bufferedTrailingZeros = min(Self.followingSilenceSamples, oldTail + remainder)
+                droppedZeroSamples += oldTail + remainder - bufferedTrailingZeros
                 continuousZeroSamples += samples
-                droppedZeroSamples += samples - keep
             } else {
+                if bufferedTrailingZeros > 0 {
+                    output.append(Data(repeating: 0, count: bufferedTrailingZeros * 2))
+                }
+                bufferedTrailingZeros = 0
                 continuousZeroSamples = 0
-                output.append(contentsOf: bytes[start..<position])
+                output.append(contentsOf: bytes[start..<i])
             }
         }
         return output
+    }
+
+    /// Flushes the reserved trailing quiet space when no new phrase follows.
+    /// Call only once when the complete server audio stream ends.
+    mutating func finish() -> Data {
+        let count = bufferedTrailingZeros
+        bufferedTrailingZeros = 0
+        return Data(repeating: 0, count: count * 2)
     }
 
     var removedSeconds: Double {
