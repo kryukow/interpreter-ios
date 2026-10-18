@@ -23,6 +23,8 @@ struct TranslationReply {
     private var receivedBytes = 0
     private var text = ""
     private var audio = Data()
+    private var diagnostics: TranslationEventDiagnostics?
+    private var onDiagnostics: ((String) -> Void)?
     private var onText: ((String) -> Void)?
     private var onAudio: ((Data) -> Void)?
     private var onProgress: ((Int) -> Void)?
@@ -41,8 +43,8 @@ struct TranslationReply {
         frames.removeAll()
         ready = false; inputEnded = false; closeSent = false
         sentBytes = 0; receivedBytes = 0
-        text = ""; audio = Data()
-        onText = nil; onAudio = nil; onProgress = nil
+        text = ""; audio = Data(); diagnostics = nil
+        onDiagnostics = nil; onText = nil; onAudio = nil; onProgress = nil
         onWaiting = nil; onFinished = nil
     }
 
@@ -51,6 +53,7 @@ struct TranslationReply {
                onAudio: @escaping (Data) -> Void,
                onProgress: @escaping (Int) -> Void,
                onWaiting: @escaping () -> Void,
+               onDiagnostics: @escaping (String) -> Void,
                onFinished: @escaping (Result<TranslationReply, Error>) -> Void) throws {
         let update = try TranslationWire.configuration(target: target)
         guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -60,6 +63,8 @@ struct TranslationReply {
         let token = generation
         self.onText = onText; self.onAudio = onAudio
         self.onProgress = onProgress; self.onWaiting = onWaiting
+        self.onDiagnostics = onDiagnostics
+        self.diagnostics = TranslationEventDiagnostics(target: target, configuration: update)
         self.onFinished = onFinished
 
         var request = URLRequest(url: TranslationWire.endpoint)
@@ -88,13 +93,17 @@ struct TranslationReply {
                     }
                     switch try TranslationWire.event(data) {
                     case .created:
+                        self.diagnostics?.note("session.created received")
                         try await socket.send(.string(update))
+                        self.diagnostics?.note("session.update SENT")
                     case .updated(let targetLanguage):
                         guard targetLanguage == target else { throw WireError.configuration }
+                        self.diagnostics?.note("session.updated received; output_language=\(targetLanguage)")
                         self.ready = true
                         self.armTimeout(100, token: token)
                         self.pump(token)
                     case .text(let delta):
+                        self.diagnostics?.note("session.output_transcript.delta received; utf8_bytes=\(delta.utf8.count) (content omitted)")
                         self.text += delta
                         guard self.text.utf8.count <= 100_000 else { throw WireError.invalidResponse }
                         self.onText?(self.text)
@@ -102,9 +111,11 @@ struct TranslationReply {
                         guard self.audio.count + pcm.count <= WavePCM.maximumOutputBytes else {
                             throw WireError.invalidResponse
                         }
+                        self.diagnostics?.audio(pcm, rawEvent: data)
                         self.audio.append(pcm)
                         self.onAudio?(pcm)
                     case .closed:
+                        self.diagnostics?.closedReceived()
                         guard self.closeSent, self.sentBytes == self.receivedBytes else {
                             throw WireError.sending
                         }
@@ -112,7 +123,9 @@ struct TranslationReply {
                             ? Data() : try WavePCM.encode(self.audio)
                         self.complete(.success(TranslationReply(text: self.text, audio: wave)), token: token)
                         return
-                    case .failure(let error): throw error
+                    case .failure(let error):
+                        self.diagnostics?.note("server error received (details omitted)")
+                        throw error
                     case .other: break
                     }
                 }
@@ -135,6 +148,7 @@ struct TranslationReply {
     func finishInput() {
         guard !inputEnded else { return }
         inputEnded = true
+        diagnostics?.note("finishInput called; waiting to send remaining input frames")
         pump(generation)
     }
 
@@ -150,11 +164,13 @@ struct TranslationReply {
                         try await socket.send(.string(try TranslationWire.append(frame)))
                         guard self.generation == token else { return }
                         self.sentBytes += frame.count
+                        self.diagnostics?.inputFrameSent(byteCount: frame.count)
                         self.onProgress?(self.sentBytes)
                     } else if self.inputEnded {
                         self.closeSent = true
                         try await socket.send(.string("{\"type\":\"session.close\"}"))
                         guard self.generation == token else { return }
+                        self.diagnostics?.closeSent()
                         self.armTimeout(35, token: token)
                         self.onWaiting?()
                         break
@@ -188,7 +204,15 @@ struct TranslationReply {
     private func complete(_ result: Result<TranslationReply, Error>, token: UUID) {
         guard generation == token else { return }
         let callback = onFinished
+        let diagnosticCallback = onDiagnostics
+        let outcome: String
+        switch result {
+        case .success: outcome = "success"
+        case .failure(let error): outcome = "error: \(String(describing: type(of: error))) (details omitted)"
+        }
+        let report = diagnostics?.report(outcome: outcome)
         cancel()
+        if let report { diagnosticCallback?(report) }
         callback?(result)
     }
 }
