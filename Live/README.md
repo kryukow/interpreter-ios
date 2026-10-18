@@ -367,3 +367,34 @@ uninterrupted bilingual call. Production WebSocket mode is unchanged.
 Validation: compile simulator and real iPhone, then confirm physical speaker
 vs built-in receiver and AirPods route preservation on-device. No new AI calls
 are required to configure routing; normal translation API usage is still billed.
+
+## 1.4.20 (30): buffering full WebRTC voice until Push-to-Talk release
+
+Adds a user-visible `Озвучивать только после отпускания` switch inside the
+existing WebRTC experiment. Default ON; OFF preserves 1.4.18 parallel live
+interpretation. Production WebSocket is unchanged.
+
+With delayed output enabled:
+- WebRTC microphone capture/transmission remains **live while held**, as before.
+- A custom `RTCAudioDevice` accesses decoded remote PCM before speaker
+  playback using an AVAudioEngine node. While pressed, its in-memory FIFO
+  captures OpenAI voice and emits only digital silence to the hardware output.
+- On release the microphone track is disabled, `session.close` is sent, and
+  the FIFO plays the original buffered output in chronological order.
+- New output still arriving after release is appended to the same FIFO.
+  `session.closed` does not close the peer until buffered audio has played.
+- A 65s PCM cap prevents unbounded memory; server trailing exact-zero PCM is
+  limited to ~1 s per contiguous run. Overflow is shown in the UI.
+- Same model, same API request (not an extra TTS/synthesis request), original
+  audio content retained. Nothing is persisted or uploaded beyond the user's
+  ordinary translation session.
+- The custom full-duplex AVAudioEngine audio device is adapted from
+  MIT-licensed https://github.com/mstyura/RTCAudioDevice by Yury Yaroshevich.
+  Original copyright and MIT permission/warranty notices are reproduced in
+  the new audio-device source files.
+
+Important: the custom media device is invasive by nature. It requires
+physical-iPhone verification of microphone input, speaker vs AirPods routing,
+lack of echo/feedback, full-length first-word-to-last playback, background
+deactivation, and extremely long recordings. Don't replace the proven
+concurrent WebRTC mode until on-device tests pass.
