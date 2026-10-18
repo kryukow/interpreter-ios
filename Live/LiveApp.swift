@@ -259,6 +259,16 @@ struct LiveView: View {
         .sheet(isPresented: $settings) { LiveSettings(model: model) }
         .sheet(isPresented: $showTranscription) { TranscriptionView(account: model) }
         .sheet(isPresented: $showVoiceLab) { LocalVoiceLabView(engine: voiceLab) }
+        .sheet(isPresented: $showWebRTCExperiment) {
+            NavigationStack {
+                WebRTCExperimentView()
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Закрыть") { showWebRTCExperiment = false }
+                        }
+                    }
+            }
+        }
         .sheet(isPresented: $importing) {
             RecordingDocumentPicker(
                 onSelected: { url in
