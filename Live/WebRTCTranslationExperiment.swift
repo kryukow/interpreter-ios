@@ -60,7 +60,9 @@ import WebRTC
                     throw ExperimentError.microphone
                 }
                 guard self.generation == token, !Task.isCancelled else { return }
-                let key = try LiveKey.read()
+                guard let key = try LiveKey.read(), !key.isEmpty else {
+                    throw ExperimentError.secretRequest
+                }
                 let secret = try await Self.fetchShortLivedSecret(key: key, target: target)
                 guard self.generation == token, !Task.isCancelled else { return }
 
