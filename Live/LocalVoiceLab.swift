@@ -426,6 +426,7 @@ struct LocalVoiceLabView: View {
     @FocusState private var textEditorFocused: Bool
     @State private var importing = false
     @State private var confirmingVoiceDeletion = false
+    @AppStorage("live.russianProofreadingEnabled") private var russianProofreadingEnabled = true
     @StateObject private var chatLogin = Login()
     @State private var authBrowser: VoiceAuthBrowserLink?
     @State private var chatConnected = false
@@ -438,25 +439,37 @@ struct LocalVoiceLabView: View {
     @State private var translatedText = ""
     @State private var translatedSource = ""
     @State private var translatedLanguage = ""
+    @State private var translatedModel = ""
     @State private var translationError = ""
+    @State private var activeRequestID = UUID()
+    @State private var pendingSource = ""
+    @State private var pendingLanguage = ""
+    @State private var pendingModel = ""
+    @State private var skipNextProcessingOnBlur = false
 
-    private var needsTranslation: Bool {
-        let text = phrase.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return false }
+    private var processingMode: VoiceTextProcessingPolicy.Mode {
         let recognizer = NLLanguageRecognizer()
-        recognizer.processString(text)
-        guard let detected = recognizer.dominantLanguage?.rawValue else { return language != "ru" }
-        let detectedBase = detected.split(separator: "-").first.map(String.init) ?? detected
-        return detectedBase != language && !(language == "no" && detectedBase == "nb")
+        recognizer.processString(phrase)
+        return VoiceTextProcessingPolicy.mode(
+            original: phrase,
+            targetLanguage: language,
+            detectedLanguage: recognizer.dominantLanguage?.rawValue,
+            proofreadingEnabled: russianProofreadingEnabled
+        )
     }
+
+    private var needsTranslation: Bool { processingMode == .translate }
+    private var needsProofreading: Bool { processingMode == .proofreadRussian }
+    private var needsTextProcessing: Bool { processingMode != .unchanged }
 
     private var translationReady: Bool {
         !translatedText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-        translatedSource == phrase && translatedLanguage == language && !translating
+        translatedSource == phrase && translatedLanguage == language &&
+        translatedModel == chatModel && !translating
     }
 
     private var textForSpeech: String {
-        needsTranslation ? translatedText : phrase
+        needsTextProcessing ? translatedText : phrase
     }
 
     var body: some View {
@@ -548,23 +561,40 @@ struct LocalVoiceLabView: View {
                     .pickerStyle(.menu)
                     .onChange(of: language) { _, _ in
                         textEditorFocused = false
-                        // Always translate from the user's original, never from a prior translation.
+                        // Always process from the user's original, never from previous output.
                         resetTranslation()
-                        requestTranslation()
+                        requestTextProcessing()
+                    }
+                    if needsProofreading {
+                        Text("Исходный текст")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     TextEditor(text: $phrase)
                         .focused($textEditorFocused)
                         .frame(minHeight: 86)
                         .onChange(of: phrase) { _, _ in resetTranslation() }
                         .onChange(of: textEditorFocused) { _, focused in
-                            if !focused { requestTranslation() }
+                            if !focused {
+                                if skipNextProcessingOnBlur {
+                                    skipNextProcessingOnBlur = false
+                                } else {
+                                    requestTextProcessing()
+                                }
+                            }
                         }
-                    if needsTranslation {
+                    .onChange(of: russianProofreadingEnabled) { _, _ in
+                        resetTranslation()
+                        requestTextProcessing()
+                    }
+                    if needsTextProcessing {
                         if !chatConnected {
-                            Button("Подключить ChatGPT для перевода") { connectChatGPT() }
+                            Button(needsProofreading
+                                   ? "Подключить ChatGPT для корректуры"
+                                   : "Подключить ChatGPT для перевода") { connectChatGPT() }
                                 .disabled(chatBusy)
                             Text(chatBusy ? "Подключаю ChatGPT…" :
-                                 "Перевод использует разрешённые лимиты твоей подписки ChatGPT. Отдельный API-ключ не нужен.")
+                                 "Обработка текста использует лимиты подписки ChatGPT Plus. Отдельный API-ключ не нужен.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             if !chatMessage.isEmpty {
@@ -579,29 +609,40 @@ struct LocalVoiceLabView: View {
                                 .onChange(of: chatModel) { _, selected in
                                     try? SessionStore.defaults().set(selected, forKey: "model")
                                     resetTranslation()
-                                    requestTranslation()
+                                    requestTextProcessing()
                                 }
                             }
                             if translating {
                                 HStack {
                                     ProgressView().tint(.white)
-                                    Text("Перевожу на выбранный язык…")
+                                    Text(needsProofreading
+                                         ? "Исправляю русский текст…"
+                                         : "Перевожу на выбранный язык…")
                                         .font(.subheadline)
                                         .foregroundStyle(.secondary)
                                 }
                             }
-                            if !translatedText.isEmpty {
-                                Text("Перевод · \(VoiceSynthesisLanguage.all.first(where: { $0.code == language })?.name ?? language)")
+                            if translationReady {
+                                Text(needsProofreading ? "Исправленный текст" :
+                                     "Перевод · \(VoiceSynthesisLanguage.all.first(where: { $0.code == language })?.name ?? language)")
                                     .font(.caption.weight(.medium))
                                     .foregroundStyle(.secondary)
                                 TextEditor(text: $translatedText)
                                     .frame(minHeight: 70)
-                                    .accessibilityLabel("Переведённый текст. Можно исправить перед озвучиванием.")
+                                    .accessibilityLabel(needsProofreading
+                                        ? "Исправленный русский текст. Проверь перед озвучиванием."
+                                        : "Переведённый текст. Можно исправить перед озвучиванием.")
+                                if needsProofreading && translatedText != phrase {
+                                    Button("Вернуть исходный вариант") {
+                                        translatedText = phrase
+                                    }
+                                    .font(.footnote)
+                                }
                             }
                             if !translating && !translationReady {
-                                Button("Перевести через ChatGPT") {
+                                Button(needsProofreading ? "Исправить через ChatGPT" : "Перевести через ChatGPT") {
                                     textEditorFocused = false
-                                    requestTranslation()
+                                    requestTextProcessing()
                                 }
                             }
                             if !translationError.isEmpty {
@@ -613,13 +654,25 @@ struct LocalVoiceLabView: View {
                     Button("Озвучить моим голосом") {
                         textEditorFocused = false
                         let spoken = textForSpeech
-                        guard !needsTranslation || translationReady else { return }
+                        guard !needsTextProcessing || translationReady else { return }
                         engine.speak(spoken, language: language)
                     }
                     .disabled(engine.busy || !engine.loaded || !engine.hasVoice ||
-                              translating || (needsTranslation && !translationReady) ||
+                              translating || (needsTextProcessing && !translationReady) ||
                               textForSpeech.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
                               textForSpeech.count > 500)
+                    if needsProofreading && !translating && !translationReady {
+                        Button("Озвучить оригинал без исправлений") {
+                            // Explicit opt-out: never silently fall back after an API error.
+                            if textEditorFocused { skipNextProcessingOnBlur = true }
+                            textEditorFocused = false
+                            engine.speak(phrase, language: language)
+                        }
+                        .font(.footnote)
+                        .disabled(engine.busy || !engine.loaded || !engine.hasVoice ||
+                                  phrase.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ||
+                                  phrase.count > 500)
+                    }
                     if engine.outputURL != nil {
                         Button("Повторить аудио") {
                             engine.replayLastAudio()
@@ -689,10 +742,15 @@ struct LocalVoiceLabView: View {
 
     private func resetTranslation() {
         translationTask?.cancel()
+        activeRequestID = UUID() // A cancelled streaming request may finish later.
+        pendingSource = ""
+        pendingLanguage = ""
+        pendingModel = ""
         translating = false
         translatedText = ""
         translatedSource = ""
         translatedLanguage = ""
+        translatedModel = ""
         translationError = ""
     }
 
@@ -709,7 +767,7 @@ struct LocalVoiceLabView: View {
             try SessionStore.defaults().set(chatModel, forKey: "model")
             chatConnected = true
             chatMessage = "ChatGPT подключён."
-            requestTranslation()
+            requestTextProcessing()
         } catch {
             chatConnected = false
             chatMessage = error.localizedDescription
@@ -741,45 +799,72 @@ struct LocalVoiceLabView: View {
             try SessionStore.defaults().set(chatModel, forKey: "model")
             chatConnected = true
             chatMessage = "ChatGPT подключён."
-            requestTranslation()
+            requestTextProcessing()
         } catch {
             chatConnected = false
             chatMessage = error.localizedDescription
         }
     }
 
-    private func requestTranslation() {
+    private func requestTextProcessing() {
+        guard needsTextProcessing, chatConnected, !chatModel.isEmpty,
+              !textEditorFocused else { return }
+        // The model can only speak 500 characters; avoid charging plan quotas
+        // to process text that cannot be used.
+        guard phrase.count <= 500 else {
+            translationError = "Для озвучивания можно использовать не более 500 символов."
+            return
+        }
+        if translationReady { return }
+        if translating && pendingSource == phrase &&
+            pendingLanguage == language && pendingModel == chatModel { return }
+
         translationTask?.cancel()
-        guard needsTranslation, chatConnected, !chatModel.isEmpty, !textEditorFocused else { return }
+        let requestID = UUID()
+        activeRequestID = requestID
         let original = phrase
         let target = language
-        translationError = ""
+        let selectedModel = chatModel
+        let proofread = needsProofreading
+        pendingSource = original
+        pendingLanguage = target
+        pendingModel = selectedModel
         translatedSource = ""
         translatedLanguage = ""
+        translatedModel = ""
         translatedText = ""
+        translationError = ""
         translating = true
+
         translationTask = Task { @MainActor in
             do {
                 guard let saved = try SessionStore.load() else {
-                    throw Failure.message("Подключи ChatGPT для перевода.")
+                    throw Failure.message("Подключи ChatGPT для обработки текста.")
                 }
                 let session = try await OpenAI.refresh(saved)
+                try Task.checkCancellation()
                 let output = try await OpenAI.translateText(
-                    original, targetLanguage: target, model: chatModel, session: session
+                    original, targetLanguage: target, proofreading: proofread,
+                    model: selectedModel, session: session
                 ) { partial in
-                    guard !Task.isCancelled, phrase == original, language == target else { return }
+                    guard !Task.isCancelled, activeRequestID == requestID,
+                          phrase == original, language == target,
+                          chatModel == selectedModel else { return }
                     translatedText = partial
                 }
                 try Task.checkCancellation()
-                guard phrase == original, language == target else { return }
+                guard activeRequestID == requestID, phrase == original,
+                      language == target, chatModel == selectedModel else { return }
                 translatedText = output.text
                 translatedSource = original
                 translatedLanguage = target
+                translatedModel = selectedModel
                 translating = false
             } catch is CancellationError {
-                if phrase == original && language == target { translating = false }
+                if activeRequestID == requestID { translating = false }
             } catch {
-                guard phrase == original, language == target else { return }
+                guard activeRequestID == requestID, phrase == original,
+                      language == target, chatModel == selectedModel else { return }
                 translatedText = ""
                 translationError = error.localizedDescription
                 translating = false
