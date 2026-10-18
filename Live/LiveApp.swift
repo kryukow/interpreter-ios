@@ -213,6 +213,17 @@ struct LiveView: View {
                                 .font(.caption)
                                 .disabled(model.busy)
                         }
+                        if !model.diagnosticsReport.isEmpty {
+                            Button {
+                                model.copyDiagnostics()
+                            } label: {
+                                Label("Скопировать журнал для OpenAI Support", systemImage: "doc.on.doc")
+                            }
+                            .font(.caption)
+                            Text("Время прихода аудио, длительности пауз и параметры сессии. Без API-ключа, аудио и текста разговора.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                     .padding(14)
                     .frame(maxWidth: .infinity, alignment: .leading)

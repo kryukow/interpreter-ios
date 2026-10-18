@@ -245,3 +245,28 @@ Run the protocol, stream integrity, silence and replay audio tests, Xcode
 simulator and iPhone compilation. Re-test on an actual iPhone with both
 speaker and headphones, and inspect the audio route when comparing Apple
 and OpenAI voices. The branch is a draft for testing, not a production release.
+
+## 1.4.16 (26) — Text-only audio delta diagnostics for API Support
+
+The realtime conversation now collects timing-only metadata in memory for a
+single translation session, available as **Скопировать журнал для OpenAI Support**
+after session completion. It does not collect or expose API keys, microphone
+audio, server PCM contents, or recognized/spoken transcript strings.
+
+The copied report includes:
+- User-local ISO-8601 start/end wall-clock timestamps (with offset), target
+  language, exact non-secret `session.update` JSON, input frame 9600B/200ms.
+- `session.close` send and `session.closed` receive events (or error).
+- Each included audio delta's arrival wall clock, incoming bytes, zero sample
+  count/ratio, sample duration, delta-to-delta receive gap; optional server
+  event_id and elapsed_ms metadata when supplied by the API.
+- Internal and trailing contiguous exact-zero runs in received PCM, measured
+  by output sample offset, and top arrival gaps. An excerpt is automatically
+  selected around the longest internal zero run and response tail.
+
+A saved WAV alone cannot reconstruct event-arrival timestamps. Make **one new
+reproducible translation in this version**, copy its diagnostic report and paste
+it into the ongoing OpenAI API Support case. The report is NOT automatically
+uploaded or persisted. It is replaced when the next translation starts.
+The original WAV export and audio processing remain unchanged from 1.4.15.
+The independent Chatterbox model and proofreading remain untouched.
