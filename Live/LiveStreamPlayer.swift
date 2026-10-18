@@ -3,7 +3,8 @@ import Foundation
 
 /// Plays the PCM16 translation stream after microphone release.
 /// The original server audio is retained separately for free replay.
-/// The byte audit checks transport/playback fidelity, not translation accuracy.
+/// The byte audit checks fidelity *after* intentional removal of long exact-zero
+/// silence, not semantic translation accuracy. Original server WAV is untouched.
 @MainActor final class LiveStreamPlayer {
     private enum PlaybackError: Error { case invalidBuffer }
 
@@ -17,6 +18,7 @@ import Foundation
     private var failed = false
     private var outstanding = 0
     private var integrity = StreamAudioIntegrity()
+    private var silenceCompactor = DigitalSilenceCompactor()
     private var token = UUID()
     private(set) var isPlaying = false
 
@@ -30,8 +32,12 @@ import Foundation
             fail("Некорректный звуковой фрагмент. Можно прослушать полный ответ или озвучить текст.")
             return
         }
-        integrity.receive(pcm)
-        pending.append(pcm)
+        // Server audio is archived unchanged by TranslationConnection.
+        // Compact only exact digital silence for real-time presentation.
+        let audible = silenceCompactor.process(pcm)
+        guard !audible.isEmpty else { return }
+        integrity.receive(audible)
+        pending.append(audible)
         flush()
     }
 
@@ -73,6 +79,7 @@ import Foundation
         closed = false
         failed = false
         integrity = StreamAudioIntegrity()
+        silenceCompactor = DigitalSilenceCompactor()
         isPlaying = false
     }
 
