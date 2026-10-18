@@ -286,6 +286,7 @@ final class BufferedWebRTCAudioDevice: NSObject {
           inputLatency = audioSession.inputLatency
 
           let getPlayoutData = delegate.getPlayoutData
+          let audioGate = self.speechGate
           let audioSource = AVAudioSourceNode(format: rtcPlayFormat,
                                               renderBlock: { (isSilence, timestamp, frameCount, outputData) -> OSStatus in
             var flags: AudioUnitRenderActionFlags = []
@@ -299,7 +300,7 @@ final class BufferedWebRTCAudioDevice: NSObject {
             var audible = false
             for output in UnsafeMutableAudioBufferListPointer(outputData) {
               if let ptr = output.mData {
-                if speechGate.process(ptr, byteCount: Int(output.mDataByteSize)) {
+                if audioGate.process(ptr, byteCount: Int(output.mDataByteSize)) {
                   audible = true
                 }
               }
@@ -428,7 +429,7 @@ extension BufferedWebRTCAudioDevice: RTCAudioDevice {
 
     shouldPlay = false
     shouldRecord = false
-    measureTime {
+    rtcMeasureTime {
       updateEngine()
     }
     delegate = nil
@@ -448,7 +449,7 @@ extension BufferedWebRTCAudioDevice: RTCAudioDevice {
   func startPlayout() -> Bool {
     print("Start playout")
     shouldPlay = true
-    measureTime {
+    rtcMeasureTime {
       updateEngine()
     }
     return true
@@ -457,7 +458,7 @@ extension BufferedWebRTCAudioDevice: RTCAudioDevice {
   func stopPlayout() -> Bool {
     print("Stop playout")
     shouldPlay = false
-    measureTime {
+    rtcMeasureTime {
       updateEngine()
     }
     return true
@@ -476,7 +477,7 @@ extension BufferedWebRTCAudioDevice: RTCAudioDevice {
   func startRecording() -> Bool {
     print("Start recording")
     shouldRecord = true
-    measureTime {
+    rtcMeasureTime {
       updateEngine()
     }
     return true
@@ -485,7 +486,7 @@ extension BufferedWebRTCAudioDevice: RTCAudioDevice {
   func stopRecording() -> Bool {
     print("Stop recording")
     shouldRecord = false
-    measureTime {
+    rtcMeasureTime {
       updateEngine()
     }
     return true
