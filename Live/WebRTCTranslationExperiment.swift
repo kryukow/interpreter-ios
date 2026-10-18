@@ -307,9 +307,9 @@ import WebRTC
             transcript += delta
         case "session.closed":
             guard phase == .finishing else { return }
-            // The service has finished streaming. WebRTC may stop calling its
-            // audio render callback while delayed PCM is still queued.
-            // A stalled queue must never keep the microphone disabled for 80s.
+            // The server finished producing the translation, but WebRTC's
+            // render callback may stop with PCM still queued. Make a bounded
+            // handoff to local playback instead of waiting up to 80 seconds.
             microphoneTrack?.isEnabled = false
             diagnostic = summary()
             status = playbackAfterRelease
@@ -324,13 +324,8 @@ import WebRTC
                 // 80-second UI lockouts. Keep a short bounded grace window for
                 // WebRTC's final decoded samples, then finish the preserved FIFO
                 // using a local player which is independent of the peer.
-                if self.playbackAfterRelease {
-                    do { try await Task.sleep(for: .milliseconds(650)) }
-                    catch { return }
-                } else {
-                    do { try await Task.sleep(for: .milliseconds(650)) }
-                    catch { return }
-                }
+                do { try await Task.sleep(for: .milliseconds(650)) }
+                catch { return }
                 guard self.generation == token, !Task.isCancelled,
                       self.phase == .finishing else { return }
                 let overflow = self.delayedGate.hasOverflowed
