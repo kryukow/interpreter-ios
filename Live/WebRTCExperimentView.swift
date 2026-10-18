@@ -36,7 +36,23 @@ struct WebRTCExperimentView: View {
                     Label(engine.status, systemImage: statusIcon)
                         .font(.subheadline.weight(.semibold))
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("Желательно использовать AirPods: перевод может прозвучать ещё до отпускания кнопки. В эксперименте запись WAV не сохраняется.")
+                    HStack(spacing: 7) {
+                        Image(systemName: "speaker.wave.2")
+                        Text("Аудиовыход: " + engine.audioOutput)
+                            .font(.caption.weight(.medium))
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.secondary)
+                    if engine.canRetrySpeaker && engine.audioOutput.contains("Разговорный") {
+                        Button("Включить громкий динамик iPhone") {
+                            engine.configureAudioOutput()
+                        }
+                        .font(.caption.weight(.semibold))
+                    }
+                    if let issue = engine.speakerRoutingIssue {
+                        Text(issue).font(.caption).foregroundStyle(.orange)
+                    }
+                    Text("Без наушников используем громкий динамик iPhone. С AirPods звук остаётся в наушниках. При одновременной речи и воспроизведении возможен акустический отклик.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

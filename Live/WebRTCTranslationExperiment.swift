@@ -16,6 +16,11 @@ import WebRTC
     @Published private(set) var transcript = ""
     @Published private(set) var diagnostic = ""
     @Published private(set) var targetLanguage = "de"
+    @Published private(set) var audioOutput = "Не подключён"
+    @Published private(set) var speakerRoutingIssue: String?
+    var canRetrySpeaker: Bool {
+        phase == .ready || phase == .speaking || phase == .finishing
+    }
 
     var canTalk: Bool { phase == .ready }
     var isSpeaking: Bool { phase == .speaking }
@@ -31,6 +36,7 @@ import WebRTC
     private var peer: RTCPeerConnection?
     private var events: RTCDataChannel?
     private var microphoneTrack: RTCAudioTrack?
+    private var routeObserver: NSObjectProtocol?
     private var connectingTask: Task<Void, Never>?
     private var generation = UUID()
     private var lastEventAt: Date?
@@ -70,6 +76,7 @@ import WebRTC
                     .playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth]
                 )
                 try AVAudioSession.sharedInstance().setActive(true)
+                self.observeAudioRoute()
                 let config = RTCConfiguration()
                 config.sdpSemantics = .unifiedPlan
                 // OpenAI answer contains the ICE candidates. Avoid third-party
@@ -115,6 +122,7 @@ import WebRTC
 
     func beginSpeaking() {
         guard phase == .ready else { return }
+        configureAudioOutput()
         microphoneTrack?.isEnabled = true
         beganSpeakingAt = Date()
         phase = .speaking
@@ -140,6 +148,10 @@ import WebRTC
 
     func disconnect() {
         generation = UUID()
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
         connectingTask?.cancel()
         connectingTask = nil
         microphoneTrack?.isEnabled = false
@@ -161,12 +173,78 @@ import WebRTC
         firstTextAt = nil
         phase = .idle
         status = "Отключено"
+        audioOutput = "Не подключён"
+        speakerRoutingIssue = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    /// WebRTC manages its own RTCAudioSession and can switch from the desired
+    /// loudspeaker route back to the built-in receiver after negotiation.
+    /// Only switch an on-device receiver to speaker. Never override AirPods,
+    /// wired headphones, car audio or other external outputs.
+    private func observeAudioRoute() {
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+        routeObserver = NotificationCenter.default.addObserver(
+            forName: AVAudioSession.routeChangeNotification,
+            object: AVAudioSession.sharedInstance(), queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.phase != .idle, self.phase != .failed else { return }
+                self.configureAudioOutput()
+            }
+        }
+        refreshOutputLabel()
+    }
+
+    private func refreshOutputLabel() {
+        let output = AVAudioSession.sharedInstance().currentRoute.outputs.first
+        switch output?.portType {
+        case .builtInSpeaker: audioOutput = "Основной динамик iPhone"
+        case .builtInReceiver: audioOutput = "Разговорный динамик (тихо)"
+        case nil: audioOutput = "Аудиовыход определяется"
+        default: audioOutput = output?.portName ?? "Внешнее устройство"
+        }
+    }
+
+    func configureAudioOutput() {
+        let session = AVAudioSession.sharedInstance()
+        let ports = session.currentRoute.outputs.map(\.portType)
+        let external = ports.contains { $0 != .builtInSpeaker && $0 != .builtInReceiver }
+        // Respect headphones and Bluetooth. A speaker override would silently
+        // switch both output and microphone away from an attached headset.
+        guard !external else {
+            speakerRoutingIssue = nil
+            refreshOutputLabel()
+            return
+        }
+        if ports.contains(.builtInSpeaker) &&
+            session.category == .playAndRecord &&
+            session.categoryOptions.contains(.defaultToSpeaker) {
+            speakerRoutingIssue = nil
+            refreshOutputLabel()
+            return
+        }
+        let rtc = RTCAudioSession.sharedInstance()
+        rtc.lockForConfiguration()
+        defer { rtc.unlockForConfiguration() }
+        do {
+            try rtc.setCategory(AVAudioSession.Category.playAndRecord,
+                                with: [.defaultToSpeaker, .allowBluetooth])
+            try rtc.setMode(AVAudioSession.Mode.voiceChat)
+            if session.currentRoute.outputs.contains(where: { $0.portType == .builtInReceiver }) {
+                try rtc.overrideOutputAudioPort(.speaker)
+            }
+            speakerRoutingIssue = nil
+        } catch {
+            speakerRoutingIssue = "Не удалось переключить громкий динамик: " + error.localizedDescription
+        }
+        refreshOutputLabel()
     }
 
     private func refreshReadiness() {
         guard phase == .connecting, didConnect, channelOpen else { return }
         phase = .ready
+        configureAudioOutput()
         status = "WebRTC подключён · удерживай кнопку и говори"
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
@@ -234,6 +312,7 @@ import WebRTC
             "last_event=\(stamp(lastEventAt))",
             "received_data_channel_events=\(receivedEvents)",
             "remote_audio_tracks=\(remoteAudioTracks)",
+            "audio_output=\(audioOutput)",
             "session.closed=true",
             "Remote WebRTC audio is played by WebRTC (not stored as PCM/WAV)."
         ].joined(separator: "\n")
@@ -335,6 +414,7 @@ extension WebRTCTranslationExperiment: RTCPeerConnectionDelegate {
             switch newState {
             case .connected, .completed:
                 self.didConnect = true
+                self.configureAudioOutput()
                 self.refreshReadiness()
             case .failed, .disconnected:
                 if self.phase == .ready || self.phase == .speaking {
