@@ -205,3 +205,17 @@ GitHub CI must verify the existing 1.4.13 safeguards plus the new stream-audit
 tests and iOS builds. Device tests should verify both languages, long phrases,
 pauses, imported audio, interruption/resumption, original WAV replay, and local
 text speech. Successful compilation is not an on-device speech-quality test.
+
+### Long pauses in the returned realtime voice (two field samples)
+
+OpenAI's original audio can include very long exact-zero gaps between phrases and
+around 15 seconds of digitally silent tail padding. In 1.4.14 we remove only
+*consecutive exact-zero PCM16 samples beyond 650 ms* in the streaming player;
+all actual nonzero speech samples and short pauses are preserved unchanged.
+This is deliberately not a natural-speech VAD or a model latency fix: if an
+OpenAI response arrives late or contains quiet nonzero background noise, the
+client cannot safely remove that delay/segment using this zero-only approach.
+`TranslationConnection` retains the original server WAV for export/replay,
+without any silence editing, so A/B diagnosis stays possible. No extra paid call.
+The offline silence test confirms cross-chunk caps, unchanged active speech,
+unchanged short pauses, and retention of the original semantics on playback.
