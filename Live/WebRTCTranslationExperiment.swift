@@ -307,9 +307,9 @@ import WebRTC
             transcript += delta
         case "session.closed":
             guard phase == .finishing else { return }
-            // The service has finished streaming. WebRTC may stop calling its
-            // audio render callback while delayed PCM is still queued.
-            // A stalled queue must never keep the microphone disabled for 80s.
+            // The server finished producing the translation, but WebRTC's
+            // render callback may stop with PCM still queued. Make a bounded
+            // handoff to local playback instead of waiting up to 80 seconds.
             microphoneTrack?.isEnabled = false
             diagnostic = summary()
             status = playbackAfterRelease
@@ -319,70 +319,52 @@ import WebRTC
             drainTask?.cancel()
             drainTask = Task { [weak self] in
                 guard let self else { return }
-                var drainResult: WebRTCAudioDrainMonitor.Result = .drained
-                if self.playbackAfterRelease {
-                    var monitor = WebRTCAudioDrainMonitor(
-                        pendingBytes: self.delayedGate.pendingBytes,
-                        renderedBytes: self.delayedGate.renderedBytes,
-                        at: ProcessInfo.processInfo.systemUptime
-                    )
-                    while self.generation == token && !Task.isCancelled {
-                        drainResult = monitor.observe(
-                            pendingBytes: self.delayedGate.pendingBytes,
-                            renderedBytes: self.delayedGate.renderedBytes,
-                            at: ProcessInfo.processInfo.systemUptime
-                        )
-                        guard drainResult == .waiting else { break }
-                        do {
-                            try await Task.sleep(nanoseconds: 100_000_000)
-                        } catch {
-                            return
-                        }
-                    }
-                } else {
-                    do {
-                        try await Task.sleep(nanoseconds: 1_500_000_000)
-                    } catch {
-                        return
-                    }
-                }
+                // A session.closed event terminates remote generation. Waiting
+                // for a peer-owned renderer to finish is unreliable and caused
+                // 80-second UI lockouts. Keep a short bounded grace window for
+                // WebRTC's final decoded samples, then finish the preserved FIFO
+                // using a local player which is independent of the peer.
+                do { try await Task.sleep(for: .milliseconds(650)) }
+                catch { return }
                 guard self.generation == token, !Task.isCancelled,
                       self.phase == .finishing else { return }
                 let overflow = self.delayedGate.hasOverflowed
-                self.diagnostic += "\ndrain_result=\(drainResult)" + "\nrendered_pcm_bytes=\(self.delayedGate.renderedBytes)"
-                // Stop the WebRTC engine first, then atomically extract the
-                // unread FIFO. Calling WebRTC's render callback cannot be
-                // relied upon once session.closed shuts down remote audio.
+                self.diagnostic += "\nrendered_pcm_bytes=\(self.delayedGate.renderedBytes)"
                 self.closeRTC()
-                switch drainResult {
-                case .drained:
+                guard self.playbackAfterRelease else {
+                    self.finishPlayback(
+                        "Перевод завершён · можно говорить снова",
+                        outcome: "realtime_completed"
+                    )
+                    return
+                }
+                // Snapshot only the samples WebRTC has NOT yet emitted.
+                // We never replay an already audible prefix.
+                guard let remaining = self.delayedGate.consumeRemainingPCM() else {
                     self.finishPlayback(
                         overflow
-                            ? "Звуковой буфер переполнился · часть перевода могла потеряться"
-                            : "Перевод прозвучал полностью · можно говорить снова",
+                            ? "Буфер звука переполнился · часть перевода могла пропасть"
+                            : "Перевод завершён · можно говорить снова",
                         outcome: overflow ? "overflow" : "drained"
                     )
-                case .stalled, .timedOut, .waiting:
-                    guard let remaining = self.delayedGate.consumeRemainingPCM(),
-                          let wav = remaining.wavData() else {
-                        self.finishPlayback(
-                            "Не удалось восстановить остаток аудио · перевод мог оборваться",
-                            outcome: "local_tail_format_error"
-                        )
-                        return
-                    }
-                    self.status = "Воспроизвожу сохранённый остаток перевода…"
-                    self.diagnostic += "\nlocal_tail_bytes=\(remaining.bytes.count)" +
-                        "\nlocal_tail_sample_rate=\(remaining.sampleRate)" +
-                        "\nlocal_tail_channels=\(remaining.channels)"
-                    // Allow RTCAudioSession to relinquish its audio unit before
-                    // the independent player activates its own playback route.
-                    do {
-                        try await Task.sleep(for: .milliseconds(250))
-                    } catch { return }
-                    guard self.generation == token, !Task.isCancelled else { return }
-                    self.playRemainingAudio(wav, token: token)
+                    return
                 }
+                self.diagnostic += "\nlocal_tail_bytes=\(remaining.bytes.count)" +
+                    "\nlocal_tail_sample_rate=\(remaining.sampleRate)" +
+                    "\nlocal_tail_channels=\(remaining.channels)"
+                guard let wav = remaining.wavData() else {
+                    self.finishPlayback(
+                        "Ошибка формата остатка звука · часть перевода могла пропасть",
+                        outcome: "local_tail_format_error"
+                    )
+                    return
+                }
+                self.status = "Воспроизвожу оставшийся перевод…"
+                do { try await Task.sleep(for: .milliseconds(250)) }
+                catch { return }
+                guard self.generation == token, !Task.isCancelled,
+                      self.phase == .finishing else { return }
+                self.playRemainingAudio(wav, token: token)
             }
         case "error":
             let serverError = event["error"] as? [String: Any]
@@ -438,19 +420,45 @@ import WebRTC
             }
             tailPlayer = player
             diagnostic += "\nlocal_tail_playback_started=true"
-            let duration = min(90, max(3, player.duration + 3))
+            let deadline = ProcessInfo.processInfo.systemUptime +
+                max(3, player.duration + 4)
             tailWatchdog?.cancel()
             tailWatchdog = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(duration)) }
-                catch { return }
-                guard let self, self.generation == token,
-                      self.phase == .finishing,
-                      self.tailPlayer === player else { return }
-                player.stop()
-                self.finishPlayback(
-                    "Не удалось закончить воспроизведение остатка аудио",
-                    outcome: "local_tail_timeout"
-                )
+                guard let self else { return }
+                // Some iOS audio routes finish playing without delivering an
+                // AVAudioPlayerDelegate callback. Poll real playback position,
+                // never just a fixed timeout or the WebRTC buffer length.
+                while !Task.isCancelled {
+                    do { try await Task.sleep(for: .milliseconds(200)) }
+                    catch { return }
+                    guard self.generation == token, self.phase == .finishing,
+                          self.tailPlayer === player else { return }
+                    let position = player.currentTime
+                    let duration = player.duration
+                    if !player.isPlaying {
+                        if position >= max(0, duration - 0.15) {
+                            self.diagnostic += "\nlocal_tail_position=\(position)/\(duration)"
+                            self.finishPlayback(
+                                "Перевод воспроизведён · можно говорить снова",
+                                outcome: "local_tail_completed_poll"
+                            )
+                        } else {
+                            self.finishPlayback(
+                                "Звук остановился раньше окончания · можно попробовать снова",
+                                outcome: "local_tail_stopped_early"
+                            )
+                        }
+                        return
+                    }
+                    if ProcessInfo.processInfo.systemUptime >= deadline {
+                        player.stop()
+                        self.finishPlayback(
+                            "Аудиоплеер превысил ожидаемую длительность · можно попробовать снова",
+                            outcome: "local_tail_timeout"
+                        )
+                        return
+                    }
+                }
             }
         } catch {
             finishPlayback(
