@@ -63,11 +63,11 @@ final class WebRTCDelayedAudioGate {
 
     /// Called on WebRTC's AVAudioSourceNode render thread.
     /// Input/output are interleaved 16-bit PCM; the caller supplies exact bytes.
-    func process(_ pointer: UnsafeMutableRawPointer, byteCount: Int) {
-        guard byteCount > 0 else { return }
+    @discardableResult
+    func process(_ pointer: UnsafeMutableRawPointer, byteCount: Int) -> Bool {
+        guard byteCount > 0 else { return false }
         lock.lock()
         defer { lock.unlock() }
-        if mode == .direct { return }
 
         let input = pointer.assumingMemoryBound(to: UInt8.self)
         var hasSignal = false
@@ -79,6 +79,7 @@ final class WebRTCDelayedAudioGate {
             }
             i += 2
         }
+        if mode == .direct { return hasSignal }
         if hasSignal { zeroRunBytes = 0 }
         else { zeroRunBytes += byteCount }
 
@@ -101,11 +102,13 @@ final class WebRTCDelayedAudioGate {
 
         if mode == .capture {
             memset(pointer, 0, byteCount)
-            return
+            return false
         }
+        var audible = false
         for i in 0..<byteCount {
             if used > 0 {
                 input[i] = bytes[readIndex]
+                if input[i] != 0 { audible = true }
                 readIndex += 1
                 if readIndex == bytes.count { readIndex = 0 }
                 used -= 1
@@ -113,5 +116,6 @@ final class WebRTCDelayedAudioGate {
                 input[i] = 0
             }
         }
+        return audible
     }
 }
